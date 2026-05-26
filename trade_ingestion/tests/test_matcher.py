@@ -1,5 +1,7 @@
 from datetime import date
 
+import pytest
+
 from trade_ingestion.matcher import match_trades
 from trade_ingestion.models import RawEvent
 
@@ -47,7 +49,7 @@ def test_match_trades_full_close() -> None:
     assert trade.quantity == 1.0
     assert trade.exit_price == 3.0
     assert trade.close_date == date(2024, 1, 3)
-    assert trade.fees == 0.30000000000000004
+    assert trade.fees == pytest.approx(0.3)
 
 
 def test_match_trades_partial_close_produces_matched_and_open_rows() -> None:
@@ -65,10 +67,10 @@ def test_match_trades_partial_close_produces_matched_and_open_rows() -> None:
 
     assert matched.lot_id == "open-1"
     assert matched.quantity == 1.0
-    assert matched.fees == 0.2
+    assert matched.fees == pytest.approx(0.2)
     assert remaining.lot_id.startswith("open-1:open-")
     assert remaining.quantity == 1.0
-    assert remaining.fees == 0.1
+    assert remaining.fees == pytest.approx(0.1)
     assert remaining.exit_price is None
 
 
