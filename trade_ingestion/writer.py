@@ -38,13 +38,13 @@ def write_trades(workbook_path: Path, trades: list[CanonicalTrade]) -> int:
         headers = _table_headers(table)
         existing_keys = _existing_dedup_values(table, headers)
         writeable_headers = [header for header in headers if header in WRITABLE_COLUMNS]
+        header_positions = {header: headers.index(header) + 1 for header in writeable_headers}
         pending = [trade for trade in trades if trade.lot_id not in existing_keys and trade.trade_id not in existing_keys]
 
         for trade in pending:
-            values = [getattr(trade, header) for header in writeable_headers]
             row = table.ListRows.Add()
-            for column_index, value in enumerate(values, start=1):
-                row.Range.Cells(1, headers.index(writeable_headers[column_index - 1]) + 1).Value = value
+            for header in writeable_headers:
+                row.Range.Cells(1, header_positions[header]).Value = getattr(trade, header)
 
         workbook.save()
         return len(pending)

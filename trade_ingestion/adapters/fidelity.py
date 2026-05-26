@@ -75,7 +75,7 @@ def _parse_row(row: dict[str, str | None]) -> RawEvent | None:
     if not symbol_text:
         return None
 
-    trade_date = _parse_date_value(_required_value(row, "trade_date"))
+    trade_date = _parse_date(_required_value(row, "trade_date"))
     quantity_raw = abs(_parse_float(_required_value(row, "quantity")))
     price = _parse_optional_float(_get_value(row, "price"))
     account_value = (_get_value(row, "account") or "UNKNOWN").strip()
@@ -186,13 +186,15 @@ def _normalize_option_symbol(symbol: str) -> dict[str, object]:
 
 
 def _sum_fees(row: dict[str, str | None]) -> float:
-    fee_fields: list[str] = []
-    for alias in ("commission", "fees"):
-        fee_fields.extend(field for field in FIELD_ALIASES[alias] if field in row)
-    return sum(_parse_optional_float(row.get(field)) or 0.0 for field in fee_fields)
+    return sum(
+        _parse_optional_float(row.get(field)) or 0.0
+        for alias in ("commission", "fees")
+        for field in FIELD_ALIASES[alias]
+        if field in row
+    )
 
 
-def _parse_date_value(value: str) -> datetime.date:
+def _parse_date(value: str) -> datetime.date:
     for fmt in DATE_FORMATS:
         try:
             return datetime.strptime(value.strip(), fmt).date()

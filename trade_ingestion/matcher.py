@@ -57,7 +57,8 @@ def match_trades(events: list[RawEvent], existing_lot_ids: set[str]) -> list[Can
         if remaining_close_quantity > MATCH_EPSILON:
             raise ValueError(
                 "Close event could not be matched to an open lot: "
-                f"{event.account} {event.symbol} {event.side} {event.quantity}"
+                f"lot_id={event.lot_id} trade_date={event.trade_date.isoformat()} "
+                f"account={event.account} symbol={event.symbol} side={event.side} quantity={event.quantity}"
             )
 
     for lots in open_lots.values():
