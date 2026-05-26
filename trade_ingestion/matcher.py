@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import defaultdict, deque
+from datetime import date
 from typing import Deque
 
 from trade_ingestion.models import CanonicalTrade, OpenLot, RawEvent
@@ -94,7 +95,7 @@ def _make_trade(
     quantity: float,
     fees: float,
     exit_price: float | None,
-    close_date: object,
+    close_date: date | None,
     split_suffix: str | None,
 ) -> CanonicalTrade:
     lot_id = lot.event.lot_id if split_suffix is None else f"{lot.event.lot_id}:{split_suffix}"

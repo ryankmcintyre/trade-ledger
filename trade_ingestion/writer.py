@@ -41,7 +41,7 @@ def write_trades(workbook_path: Path, trades: list[CanonicalTrade]) -> int:
         pending = [trade for trade in trades if trade.lot_id not in existing_keys and trade.trade_id not in existing_keys]
 
         for trade in pending:
-            values = [_serialize_cell(getattr(trade, header)) for header in writeable_headers]
+            values = [getattr(trade, header) for header in writeable_headers]
             row = table.ListRows.Add()
             for column_index, value in enumerate(values, start=1):
                 row.Range.Cells(1, headers.index(writeable_headers[column_index - 1]) + 1).Value = value
@@ -122,8 +122,3 @@ def _normalize_table_rows(raw_value: Any, width: int) -> list[list[Any]]:
         return [list(row) for row in raw_value]
     return [[raw_value] + [None] * (width - 1)]
 
-
-def _serialize_cell(value: object) -> object:
-    if value is None:
-        return None
-    return value
