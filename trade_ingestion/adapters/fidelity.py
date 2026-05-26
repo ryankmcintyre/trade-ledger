@@ -3,7 +3,7 @@ from __future__ import annotations
 import csv
 import io
 import re
-from datetime import datetime
+from datetime import date, datetime
 from typing import Iterable
 
 from trade_ingestion.models import RawEvent, make_fallback_lot_id
@@ -194,7 +194,7 @@ def _sum_fees(row: dict[str, str | None]) -> float:
     )
 
 
-def _parse_date(value: str) -> datetime.date:
+def _parse_date(value: str) -> date:
     for fmt in DATE_FORMATS:
         try:
             return datetime.strptime(value.strip(), fmt).date()
