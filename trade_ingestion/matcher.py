@@ -58,7 +58,8 @@ def match_trades(events: list[RawEvent], existing_lot_ids: set[str]) -> list[Can
             raise ValueError(
                 "Close event could not be matched to an open lot: "
                 f"lot_id={event.lot_id} trade_date={event.trade_date.isoformat()} "
-                f"account={event.account} symbol={event.symbol} side={event.side} quantity={event.quantity}"
+                f"account={event.account} symbol={event.symbol} side={event.side} quantity={event.quantity} "
+                f"remaining_quantity={remaining_close_quantity}"
             )
 
     for lots in open_lots.values():
