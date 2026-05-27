@@ -6,6 +6,7 @@ from typing import Any
 import pytest
 
 import main
+from trade_ingestion.matcher import MatchResult
 from trade_ingestion.models import CanonicalTrade, RawEvent
 
 
@@ -64,10 +65,10 @@ def test_run_pipeline_uses_broker_adapter_and_writer(monkeypatch: Any, tmp_path:
         captured["dedup_path"] = path
         return {"existing-lot"}
 
-    def fake_match_trades(input_events: list[RawEvent], existing_lot_ids: set[str]) -> list[CanonicalTrade]:
+    def fake_match_trades(input_events: list[RawEvent], existing_lot_ids: set[str]) -> MatchResult:
         captured["events"] = input_events
         captured["existing_lot_ids"] = existing_lot_ids
-        return trades
+        return MatchResult(trades=trades, skipped_duplicates=2, open_positions=1)
 
     def fake_write_trades(path: Path, input_trades: list[CanonicalTrade]) -> int:
         captured["write_path"] = path
@@ -76,12 +77,12 @@ def test_run_pipeline_uses_broker_adapter_and_writer(monkeypatch: Any, tmp_path:
 
     monkeypatch.setitem(main.ADAPTERS, "fake", fake_adapter)
     monkeypatch.setattr(main, "read_existing_lot_ids", fake_read_existing_lot_ids)
-    monkeypatch.setattr(main, "match_trades", fake_match_trades)
+    monkeypatch.setattr(main, "match_trades_with_summary", fake_match_trades)
     monkeypatch.setattr(main, "write_trades", fake_write_trades)
 
-    written = main.run_pipeline(broker="fake", csv_path=csv_path, workbook_path=workbook_path)
+    result = main.run_pipeline(broker="fake", csv_path=csv_path, workbook_path=workbook_path)
 
-    assert written == 1
+    assert result == main.PipelineResult(rows_ingested=1, rows_skipped=2, open_positions=1)
     assert captured["content"] == "example"
     assert captured["dedup_path"] == workbook_path
     assert captured["events"] == events
@@ -104,15 +105,19 @@ def test_main_parses_cli_arguments(monkeypatch: Any, capsys: pytest.CaptureFixtu
     csv_path = tmp_path / "input.csv"
     workbook_path = tmp_path / "ledger.xlsx"
 
-    def fake_run_pipeline(*, broker: str, csv_path: Path, workbook_path: Path) -> int:
+    def fake_run_pipeline(*, broker: str, csv_path: Path, workbook_path: Path) -> main.PipelineResult:
         assert broker == "fidelity"
         assert csv_path == tmp_path / "input.csv"
         assert workbook_path == tmp_path / "ledger.xlsx"
-        return 3
+        return main.PipelineResult(rows_ingested=3, rows_skipped=2, open_positions=1)
 
     monkeypatch.setattr(main, "run_pipeline", fake_run_pipeline)
 
     exit_code = main.main(["fidelity", str(csv_path), "--workbook", str(workbook_path)])
 
     assert exit_code == 0
-    assert capsys.readouterr().out.strip() == f"Wrote 3 trade rows to {workbook_path}"
+    assert capsys.readouterr().out.strip() == (
+        f"Ingested 3 trade rows to {workbook_path}; "
+        "skipped 2 duplicate rows; "
+        "left 1 open positions unmatched"
+    )

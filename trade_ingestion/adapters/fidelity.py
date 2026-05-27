@@ -6,9 +6,8 @@ import re
 from datetime import date, datetime
 from typing import Iterable
 
+from constants import FIDELITY_BROKER_NAME
 from trade_ingestion.models import RawEvent, make_fallback_lot_id
-
-BROKER_NAME = "Fidelity"
 HEADER_REQUIREMENTS = {"Action", "Symbol"}
 DATE_FORMATS = ("%Y-%m-%d", "%m/%d/%Y", "%m/%d/%y")
 OPTION_SYMBOL_RE = re.compile(
@@ -106,8 +105,8 @@ def _parse_row(row: dict[str, str | None]) -> RawEvent | None:
 
     return RawEvent(
         lot_id=lot_id,
-        broker=BROKER_NAME,
-        account=f"{BROKER_NAME}:{account_value}",
+        broker=FIDELITY_BROKER_NAME,
+        account=f"{FIDELITY_BROKER_NAME}:{account_value}",
         underlying=parsed_symbol["underlying"],
         symbol=parsed_symbol["symbol"],
         trade_date=trade_date,

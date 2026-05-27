@@ -1,11 +1,12 @@
 from __future__ import annotations
 
 import argparse
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Sequence
 
 from trade_ingestion.adapters import parse_fidelity_csv
-from trade_ingestion.matcher import match_trades
+from trade_ingestion.matcher import match_trades_with_summary
 from trade_ingestion.models import RawEvent
 from trade_ingestion.writer import read_existing_lot_ids, write_trades
 
@@ -15,7 +16,14 @@ ADAPTERS: dict[str, Adapter] = {
 }
 
 
-def run_pipeline(*, broker: str, csv_path: Path, workbook_path: Path) -> int:
+@dataclass(slots=True)
+class PipelineResult:
+    rows_ingested: int
+    rows_skipped: int
+    open_positions: int
+
+
+def run_pipeline(*, broker: str, csv_path: Path, workbook_path: Path) -> PipelineResult:
     adapter = ADAPTERS.get(broker.strip().lower())
     if adapter is None:
         supported = ", ".join(sorted(ADAPTERS))
@@ -24,8 +32,13 @@ def run_pipeline(*, broker: str, csv_path: Path, workbook_path: Path) -> int:
     csv_content = csv_path.read_text(encoding="utf-8-sig")
     events = adapter(csv_content)
     existing_lot_ids = read_existing_lot_ids(workbook_path)
-    trades = match_trades(events, existing_lot_ids)
-    return write_trades(workbook_path, trades)
+    match_result = match_trades_with_summary(events, existing_lot_ids)
+    written = write_trades(workbook_path, match_result.trades)
+    return PipelineResult(
+        rows_ingested=written,
+        rows_skipped=match_result.skipped_duplicates + (len(match_result.trades) - written),
+        open_positions=match_result.open_positions,
+    )
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -43,8 +56,12 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    written = run_pipeline(broker=args.broker, csv_path=args.csv_path, workbook_path=args.workbook)
-    print(f"Wrote {written} trade rows to {args.workbook}")
+    result = run_pipeline(broker=args.broker, csv_path=args.csv_path, workbook_path=args.workbook)
+    print(
+        f"Ingested {result.rows_ingested} trade rows to {args.workbook}; "
+        f"skipped {result.rows_skipped} duplicate rows; "
+        f"left {result.open_positions} open positions unmatched"
+    )
     return 0
 
 

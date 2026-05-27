@@ -5,27 +5,8 @@ from typing import Any, Sequence
 
 import xlwings as xw
 
+from constants import TABLE_NAME, WRITABLE_COLUMNS
 from trade_ingestion.models import CanonicalTrade
-
-TABLE_NAME = "tbl_trades"
-WRITABLE_COLUMNS: tuple[str, ...] = (
-    "lot_id",
-    "trade_id",
-    "underlying",
-    "symbol",
-    "open_date",
-    "exp_date",
-    "call_or_put",
-    "side",
-    "strike",
-    "stock_price_open",
-    "premium",
-    "quantity",
-    "fees",
-    "exit_price",
-    "close_date",
-    "account",
-)
 
 
 # TODO: The requirements mention reading existing trade_id values, but the matcher and schema use

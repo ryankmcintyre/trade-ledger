@@ -2,7 +2,7 @@ from datetime import date
 
 import pytest
 
-from trade_ingestion.matcher import match_trades
+from trade_ingestion.matcher import match_trades, match_trades_with_summary
 from trade_ingestion.models import RawEvent
 
 
@@ -107,3 +107,19 @@ def test_match_trades_warns_and_skips_orphaned_close() -> None:
         )
 
     assert trades == []
+
+
+def test_match_trades_with_summary_reports_duplicates_and_open_positions() -> None:
+    result = match_trades_with_summary(
+        [
+            _event(lot_id="open-1", trade_date=date(2024, 1, 2), effect="OPEN", quantity=2.0, premium=2.0, fees=0.2),
+            _event(lot_id="close-1", trade_date=date(2024, 1, 3), effect="CLOSE", quantity=1.0, premium=3.0, fees=0.1),
+        ],
+        existing_lot_ids={"open-1"},
+    )
+
+    assert len(result.trades) == 1
+    assert result.trades[0].lot_id == "open-1:open-1"
+    assert result.trades[0].close_date is None
+    assert result.skipped_duplicates == 1
+    assert result.open_positions == 1

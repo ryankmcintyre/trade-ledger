@@ -4,6 +4,7 @@ from datetime import date
 from pathlib import Path
 from typing import Any
 
+from constants import TABLE_NAME
 import trade_ingestion.writer as writer
 from trade_ingestion.models import CanonicalTrade
 
@@ -63,7 +64,7 @@ class FakeSheetApi:
         self._table = table
 
     def ListObjects(self, name: str) -> FakeTable:
-        if name != writer.TABLE_NAME:
+        if name != TABLE_NAME:
             raise KeyError(name)
         return self._table
 

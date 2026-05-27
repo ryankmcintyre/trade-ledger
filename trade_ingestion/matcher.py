@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import warnings
 from collections import defaultdict, deque
+from dataclasses import dataclass
 from datetime import date
 from typing import Deque
 
@@ -10,12 +11,25 @@ from trade_ingestion.models import CanonicalTrade, OpenLot, RawEvent
 MATCH_EPSILON = 1e-9
 
 
+@dataclass(slots=True)
+class MatchResult:
+    trades: list[CanonicalTrade]
+    skipped_duplicates: int
+    open_positions: int
+
+
 # TODO: Broker exports in scope do not provide an explicit open-lot reference on close rows.
 # TODO: Until one is available, closes are matched FIFO within (account, symbol, side), which is
 # TODO: the most conservative assumption that preserves order and avoids cross-account matching.
 def match_trades(events: list[RawEvent], existing_lot_ids: set[str]) -> list[CanonicalTrade]:
+    return match_trades_with_summary(events, existing_lot_ids).trades
+
+
+def match_trades_with_summary(events: list[RawEvent], existing_lot_ids: set[str]) -> MatchResult:
     open_lots: dict[tuple[str, str, str], Deque[OpenLot]] = defaultdict(deque)
     results: list[CanonicalTrade] = []
+    skipped_duplicates = 0
+    open_positions = 0
 
     for event in sorted(events, key=_event_sort_key):
         key = (event.account, event.symbol, event.side)
@@ -47,6 +61,8 @@ def match_trades(events: list[RawEvent], existing_lot_ids: set[str]) -> list[Can
             )
             if trade.lot_id not in existing_lot_ids:
                 results.append(trade)
+            else:
+                skipped_duplicates += 1
 
             lot.remaining_quantity -= matched_quantity
             lot.remaining_fees -= open_fee_share
@@ -71,6 +87,7 @@ def match_trades(events: list[RawEvent], existing_lot_ids: set[str]) -> list[Can
         for lot in lots:
             if lot.remaining_quantity <= MATCH_EPSILON:
                 continue
+            open_positions += 1
             lot.split_index += 1
             trade = _make_trade(
                 lot=lot,
@@ -82,8 +99,14 @@ def match_trades(events: list[RawEvent], existing_lot_ids: set[str]) -> list[Can
             )
             if trade.lot_id not in existing_lot_ids:
                 results.append(trade)
+            else:
+                skipped_duplicates += 1
 
-    return results
+    return MatchResult(
+        trades=results,
+        skipped_duplicates=skipped_duplicates,
+        open_positions=open_positions,
+    )
 
 
 def _event_sort_key(event: RawEvent) -> tuple[object, int, str]:
