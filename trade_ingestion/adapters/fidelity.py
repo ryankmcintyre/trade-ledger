@@ -16,14 +16,19 @@ OPTION_SYMBOL_RE = re.compile(
 OCC_SYMBOL_RE = re.compile(
     r"^(?P<underlying>[A-Z.]+)\s(?P<exp>\d{6})(?P<cp>[CP])(?P<strike>\d{8})$"
 )
+# NOTE: Real Fidelity CSV exports use a compact symbol format with a leading dash and no
+# zero-padded strike: e.g. -SPXW260618P7400, -NOK261016C16. This is distinct from full OCC format.
+FIDELITY_COMPACT_RE = re.compile(
+    r"^-(?P<underlying>[A-Z.]+)(?P<exp>\d{6})(?P<cp>[CP])(?P<strike>\d+(?:\.\d+)?)$"
+)
 FIELD_ALIASES: dict[str, tuple[str, ...]] = {
     "trade_date": ("Run Date", "Trade Date", "Date", "Settlement Date"),
     "action": ("Action", "Transaction Type", "Type"),
     "symbol": ("Symbol", "Description"),
     "quantity": ("Quantity", "Qty"),
-    "price": ("Price", "Net Amount Per Share", "Amount"),
-    "commission": ("Commission",),
-    "fees": ("Fees", "Fee", "Reg Fee", "Additional Fees"),
+    "price": ("Price ($)", "Price", "Net Amount Per Share", "Amount"),
+    "commission": ("Commission ($)", "Commission"),
+    "fees": ("Fees ($)", "Fees", "Fee", "Reg Fee", "Additional Fees"),
     "account": ("Account", "Account Number"),
     "transaction_id": ("Transaction ID", "Reference Number", "Trade ID"),
     "security_type": ("Security Type", "Type Detail"),
@@ -44,8 +49,12 @@ def parse_fidelity_csv(content: str) -> list[RawEvent]:
     if header_index is None:
         raise FidelityParseError("Could not locate Fidelity header row")
 
+    # csv.DictReader silently skips empty rows (row == []) while csv.reader counts them.
+    # Subtract any empty rows that precede the header so the skip loop doesn't over-advance
+    # and accidentally consume the first real data row.
+    empty_before_header = sum(1 for row in rows[:header_index] if not row)
     reader = csv.DictReader(io.StringIO(content), fieldnames=rows[header_index])
-    for _ in range(header_index + 1):
+    for _ in range(header_index - empty_before_header + 1):
         next(reader, None)
 
     events: list[RawEvent] = []
@@ -138,7 +147,9 @@ def _required_value(row: dict[str, str | None], alias_key: str) -> str:
 
 def _map_action(action: str) -> dict[str, str] | None:
     normalized = action.strip().lower()
-    mapping: dict[str, dict[str, str]] = {
+
+    # Short-form exact matches — kept for alternate CSV layouts and test fixtures.
+    _EXACT: dict[str, dict[str, str]] = {
         "buy": {"effect": "OPEN", "side": "C", "instrument": "equity"},
         "sell": {"effect": "CLOSE", "side": "C", "instrument": "equity"},
         "buy to open": {"effect": "OPEN", "side": "B", "instrument": "option"},
@@ -146,13 +157,59 @@ def _map_action(action: str) -> dict[str, str] | None:
         "sell to open": {"effect": "OPEN", "side": "S", "instrument": "option"},
         "buy to close": {"effect": "CLOSE", "side": "S", "instrument": "option"},
     }
-    # TODO: Fidelity can export short equity transactions, but the canonical schema only
-    # TODO: specifies side='C' for equities. This adapter conservatively treats plain buy/sell
-    # TODO: as long equity open/close until a short-equity requirement is specified.
-    return mapping.get(normalized)
+    if normalized in _EXACT:
+        return _EXACT[normalized]
+
+    # Verbose Fidelity descriptions: "YOU BOUGHT/SOLD [OPENING/CLOSING TRANSACTION] ..."
+    bought = "you bought" in normalized
+    sold = "you sold" in normalized
+
+    if "opening transaction" in normalized:
+        if bought:
+            return {"effect": "OPEN", "side": "B", "instrument": "option"}
+        if sold:
+            return {"effect": "OPEN", "side": "S", "instrument": "option"}
+
+    if "closing transaction" in normalized:
+        if bought:
+            return {"effect": "CLOSE", "side": "S", "instrument": "option"}
+        if sold:
+            return {"effect": "CLOSE", "side": "B", "instrument": "option"}
+
+    # TODO: Short equity transactions use side='S' as a placeholder; the canonical schema does
+    # TODO: not yet explicitly specify how short equity open/close positions should be represented.
+    if "short sale" in normalized and sold:
+        return {"effect": "OPEN", "side": "S", "instrument": "equity"}
+    if "short cover" in normalized and bought:
+        return {"effect": "CLOSE", "side": "S", "instrument": "equity"}
+
+    if bought:
+        return {"effect": "OPEN", "side": "C", "instrument": "equity"}
+    if sold:
+        return {"effect": "CLOSE", "side": "C", "instrument": "equity"}
+
+    return None
 
 
 def _normalize_option_symbol(symbol: str) -> dict[str, object]:
+    # Fidelity compact format with leading dash: -UNDERLYING[YYMMDD][C/P][STRIKE]
+    # e.g. -SPXW260618P7400, -NOK261016C16
+    compact_match = FIDELITY_COMPACT_RE.match(symbol)
+    if compact_match:
+        exp_date = datetime.strptime(compact_match.group("exp"), "%y%m%d").date()
+        strike_value = float(compact_match.group("strike"))
+        occ_symbol = (
+            f"{compact_match.group('underlying')} {compact_match.group('exp')}"
+            f"{compact_match.group('cp')}{int(round(strike_value * 1000)):08d}"
+        )
+        return {
+            "underlying": compact_match.group("underlying"),
+            "symbol": occ_symbol,
+            "exp_date": exp_date,
+            "call_or_put": compact_match.group("cp"),
+            "strike": strike_value,
+        }
+
     occ_match = OCC_SYMBOL_RE.match(symbol)
     if occ_match:
         exp_date = datetime.strptime(occ_match.group("exp"), "%y%m%d").date()
