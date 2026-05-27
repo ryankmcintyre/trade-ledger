@@ -51,12 +51,11 @@ class CanonicalTrade:
     open_date: date
     exp_date: date | None     # options only
     call_or_put: str | None   # 'C', 'P', or None for equities
-    side: str                 # 'BUY' or 'SELL'
+    side: str                 # 'B' or 'S' for options or 'C' for equities
     strike: float | None      # options only
     stock_price_open: float | None
     premium: float | None     # per-contract for options, per-share for equities
     quantity: float
-    collateral: float | None  # options only
     fees: float               # total fees for both legs combined
     exit_price: float | None  # None for open positions
     close_date: date | None   # None for open positions
@@ -79,7 +78,7 @@ each with their own `lot_id`. Never merge or average same-day adds.
 ### `adapters/fidelity.py`
 - Accepts a CSV file path, returns `list[RawEvent]`
 - Skips metadata rows at the top of the file — locate the true header row dynamically, do not hardcode a row number
-- Normalizes: dates → `datetime.date`, side → `'BUY'`/`'SELL'`, fees by summing all commission and fee columns, symbols to OCC format where applicable
+- Normalizes: dates → `datetime.date`, side → `'B'`/`'S'`/`C`, fees by summing all commission and fee columns, symbols to OCC format where applicable
 - Uses broker-assigned transaction ID as `lot_id` where available
 - Add a `# NOTE:` comment documenting whether native transaction IDs are used or the hash fallback
 
