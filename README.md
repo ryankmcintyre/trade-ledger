@@ -10,12 +10,11 @@ named `tbl_trades`.
 
 - Python 3.11+
 - [xlwings](https://www.xlwings.org/) (Excel must be installed on the machine)
-- pandas (optional, used internally for CSV parsing)
 
 Install dependencies:
 
 ```bash
-pip install xlwings pandas
+pip install xlwings
 ```
 
 ---
@@ -56,12 +55,12 @@ Ingested 12 trade rows to /Users/ryan/trades/ledger.xlsx; skipped 3 duplicate ro
 
 Parses Fidelity transaction history CSV exports. The adapter handles:
 
-- **Equities** — `Buy` and `Sell` actions
-- **Options** — `Buy to Open`, `Sell to Close`, `Sell to Open`, `Buy to Close` actions
-- Metadata rows at the top of the file are skipped automatically; no hardcoded row offset required
-- Option symbols are normalised to OCC format (e.g. `SPY 240119C00450000`)
+- **Equities** — buy and sell actions (both short-form like `Buy` and the verbose descriptions Fidelity uses in real exports, e.g. `YOU BOUGHT CLOUDFLARE INC CL A COM (NET) (Margin)`)
+- **Options** — open and close transactions for calls and puts (e.g. `YOU BOUGHT OPENING TRANSACTION PUT (SPXW)...`)
+- Metadata rows and footer disclaimer text at the top/bottom of the file are skipped automatically
+- Option symbols are normalised to OCC format from Fidelity's compact notation (e.g. `-SPXW260618P7400` → `SPXW 260618P07400000`)
 - Date formats accepted: `YYYY-MM-DD`, `MM/DD/YYYY`, `MM/DD/YY`
-- Fees are summed across all commission and fee columns
+- Fees are summed across all commission and fee columns (`Commission ($)` / `Fees ($)`)
 
 To export from Fidelity: **Accounts & Trade → Activity & Orders → History** → select a date range → **Download**.
 
