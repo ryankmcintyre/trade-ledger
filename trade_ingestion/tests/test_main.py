@@ -119,5 +119,5 @@ def test_main_parses_cli_arguments(monkeypatch: Any, capsys: pytest.CaptureFixtu
     assert capsys.readouterr().out.strip() == (
         f"Ingested 3 trade rows to {workbook_path}; "
         "skipped 2 duplicate rows; "
-        "left 1 open positions unmatched"
+        "left 1 open position unmatched"
     )

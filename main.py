@@ -34,6 +34,8 @@ def run_pipeline(*, broker: str, csv_path: Path, workbook_path: Path) -> Pipelin
     existing_lot_ids = read_existing_lot_ids(workbook_path)
     match_result = match_trades_with_summary(events, existing_lot_ids)
     written = write_trades(workbook_path, match_result.trades)
+    # NOTE: The writer can still skip matched rows when a legacy workbook already contains the same
+    # trade_id, so any matched-but-not-written rows count as additional dedup skips in the summary.
     return PipelineResult(
         rows_ingested=written,
         rows_skipped=match_result.skipped_duplicates + (len(match_result.trades) - written),
@@ -57,10 +59,11 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     result = run_pipeline(broker=args.broker, csv_path=args.csv_path, workbook_path=args.workbook)
+    open_label = "open position" if result.open_positions == 1 else "open positions"
     print(
         f"Ingested {result.rows_ingested} trade rows to {args.workbook}; "
         f"skipped {result.rows_skipped} duplicate rows; "
-        f"left {result.open_positions} open positions unmatched"
+        f"left {result.open_positions} {open_label} unmatched"
     )
     return 0
 
