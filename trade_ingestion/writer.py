@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, Iterable, Sequence
+from typing import Any, Sequence
 
 import xlwings as xw
 
@@ -48,6 +48,27 @@ def write_trades(workbook_path: Path, trades: list[CanonicalTrade]) -> int:
 
         workbook.save()
         return len(pending)
+    finally:
+        if not was_open:
+            workbook.close()
+            app.quit()
+
+
+def read_existing_lot_ids(workbook_path: Path) -> set[str]:
+    workbook, app, was_open = _open_workbook(workbook_path)
+    try:
+        table = _find_table(workbook, TABLE_NAME)
+        headers = _table_headers(table)
+        if "lot_id" not in headers:
+            return set()
+
+        lot_index = headers.index("lot_id")
+        data_range = getattr(table, "DataBodyRange", None)
+        if data_range is None or data_range.Value in (None, ""):
+            return set()
+
+        rows = _normalize_table_rows(data_range.Value, len(headers))
+        return {str(row[lot_index]) for row in rows if row[lot_index] not in (None, "")}
     finally:
         if not was_open:
             workbook.close()
@@ -121,4 +142,3 @@ def _normalize_table_rows(raw_value: Any, width: int) -> list[list[Any]]:
             return [list(raw_value)]
         return [list(row) for row in raw_value]
     return [[raw_value] + [None] * (width - 1)]
-
