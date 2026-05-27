@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import warnings
 from collections import defaultdict, deque
 from datetime import date
 from typing import Deque
@@ -55,11 +56,15 @@ def match_trades(events: list[RawEvent], existing_lot_ids: set[str]) -> list[Can
                 lots.popleft()
 
         if remaining_close_quantity > MATCH_EPSILON:
-            raise ValueError(
-                "Close event could not be matched to an open lot: "
+            # TODO: Date-range-limited broker exports can contain close rows whose opening lots are
+            # TODO: outside the imported window. Until there is a durable way to persist or recover
+            # TODO: those opens, ingestion skips the orphaned close after warning instead of aborting.
+            warnings.warn(
+                "Close event could not be matched to an open lot and was skipped: "
                 f"lot_id={event.lot_id} trade_date={event.trade_date.isoformat()} "
                 f"account={event.account} symbol={event.symbol} side={event.side} quantity={event.quantity} "
-                f"remaining_quantity={remaining_close_quantity}"
+                f"remaining_quantity={remaining_close_quantity}",
+                stacklevel=2,
             )
 
     for lots in open_lots.values():

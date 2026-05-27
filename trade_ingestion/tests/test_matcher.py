@@ -97,3 +97,13 @@ def test_match_trades_skips_duplicates_by_lot_id() -> None:
     )
 
     assert trades == []
+
+
+def test_match_trades_warns_and_skips_orphaned_close() -> None:
+    with pytest.warns(UserWarning, match="could not be matched to an open lot and was skipped"):
+        trades = match_trades(
+            [_event(lot_id="close-1", trade_date=date(2024, 1, 3), effect="CLOSE", quantity=1.0, premium=3.0, fees=0.2)],
+            existing_lot_ids=set(),
+        )
+
+    assert trades == []
