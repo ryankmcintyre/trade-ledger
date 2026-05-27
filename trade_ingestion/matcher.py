@@ -57,8 +57,8 @@ def match_trades(events: list[RawEvent], existing_lot_ids: set[str]) -> list[Can
 
         if remaining_close_quantity > MATCH_EPSILON:
             # TODO: Date-range-limited broker exports can contain close rows whose opening lots are
-            # TODO: outside the imported window. Until there is a durable way to persist or recover
-            # TODO: those opens, ingestion skips the orphaned close after warning instead of aborting.
+            # outside the imported window. Until there is a durable way to persist or recover
+            # those opens, ingestion skips the orphaned close after warning instead of aborting.
             warnings.warn(
                 "Close event could not be matched to an open lot and was skipped: "
                 f"lot_id={event.lot_id} trade_date={event.trade_date.isoformat()} "
