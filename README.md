@@ -14,6 +14,18 @@ Windows users can download a pre-built executable from the latest release:
 
 Excel is still required on the machine because `xlwings` uses Excel via COM automation.
 
+**Usage:**
+
+```
+trade_ledger.exe <broker> <csv_path> --workbook <workbook_path>
+```
+
+**Example:**
+
+```
+trade_ledger.exe fidelity "C:\Downloads\History.csv" --workbook "C:\trades\ledger.xlsx"
+```
+
 ---
 
 ## Requirements
