@@ -26,7 +26,13 @@ If you're running from source as a developer:
 Install dependencies:
 
 ```bash
-pip install xlwings
+pip install -r requirements.txt
+```
+
+Install development and test tooling:
+
+```bash
+pip install -r requirements.txt -r requirements-dev.txt
 ```
 
 ---
