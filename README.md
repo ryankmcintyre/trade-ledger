@@ -6,7 +6,19 @@ named `tbl_trades`.
 
 ---
 
+## Download
+
+Windows users can download a pre-built executable from the latest release:
+
+- [trade_ledger.exe](https://github.com/ryankmcintyre/trade-ledger/releases/latest/download/trade_ledger.exe)
+
+Excel is still required on the machine because `xlwings` uses Excel via COM automation.
+
+---
+
 ## Requirements
+
+If you're running from source as a developer:
 
 - Python 3.11+
 - [xlwings](https://www.xlwings.org/) (Excel must be installed on the machine)
@@ -14,7 +26,13 @@ named `tbl_trades`.
 Install dependencies:
 
 ```bash
-pip install xlwings
+pip install -r requirements.txt
+```
+
+Install development and test tooling:
+
+```bash
+pip install -r requirements.txt -r requirements-dev.txt
 ```
 
 ---
