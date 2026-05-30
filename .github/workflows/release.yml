@@ -33,7 +33,7 @@ jobs:
         run: Compress-Archive -Path dist/trade_ledger/* -DestinationPath dist/trade_ledger.zip
         shell: pwsh
 
-      - name: Create GitHub release and upload executable
+      - name: Create GitHub release and upload zip asset
         uses: softprops/action-gh-release@v3
         with:
           files: dist/trade_ledger.zip
