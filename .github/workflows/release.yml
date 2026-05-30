@@ -29,7 +29,11 @@ jobs:
       - name: Build standalone executable
         run: pyinstaller --clean --noconfirm trade_ledger.spec
 
-      - name: Create GitHub release and upload executable
+      - name: Package build as zip
+        run: Compress-Archive -Path dist/trade_ledger/* -DestinationPath dist/trade_ledger.zip
+        shell: pwsh
+
+      - name: Create GitHub release and upload zip asset
         uses: softprops/action-gh-release@v3
         with:
-          files: dist/trade_ledger.exe
+          files: dist/trade_ledger.zip
