@@ -10,7 +10,17 @@ named `tbl_trades`.
 
 Windows users can download a pre-built executable from the latest release:
 
-- [trade_ledger.exe](https://github.com/ryankmcintyre/trade-ledger/releases/latest/download/trade_ledger.exe)
+- [trade_ledger.zip](https://github.com/ryankmcintyre/trade-ledger/releases/latest/download/trade_ledger.zip)
+
+Extract the zip to a folder (for example `C:\Tools\trade_ledger\`) and run `trade_ledger.exe`
+from inside the extracted folder. The folder contains `trade_ledger.exe` alongside the Python
+runtime DLLs it depends on — keep them together.
+
+> The build is distributed as a folder rather than a single-file `.exe` so that the Python
+> runtime DLLs (e.g. `python311.dll`, `ucrtbase.dll`) live on disk next to the executable
+> instead of being extracted to `%TEMP%` on every launch. This avoids "Failed to load Python
+> DLL" / "Bad Image" errors on machines where Windows Application Control (WDAC / Smart App
+> Control) blocks DLLs loaded from temporary directories.
 
 Excel is still required on the machine because `xlwings` uses Excel via COM automation.
 
