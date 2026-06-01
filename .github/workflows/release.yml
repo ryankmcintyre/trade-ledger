@@ -30,10 +30,10 @@ jobs:
         run: pyinstaller --clean --noconfirm trade_ledger.spec
 
       - name: Package build as zip
-        run: Compress-Archive -Path dist/trade_ledger/* -DestinationPath dist/trade_ledger.zip
+        run: Compress-Archive -Path dist/trade_ledger/* -DestinationPath dist/trade_ledger-windows-x64.zip
         shell: pwsh
 
       - name: Create GitHub release and upload zip asset
         uses: softprops/action-gh-release@v3
         with:
-          files: dist/trade_ledger.zip
+          files: dist/trade_ledger-windows-x64.zip
