@@ -8,13 +8,12 @@ named `tbl_trades`.
 
 ## Download
 
-Windows users can download a pre-built executable from the latest release:
+Windows users can download a pre-built executable from the [latest release](https://github.com/ryankmcintyre/trade-ledger/releases/latest).
 
-- [trade_ledger.zip](https://github.com/ryankmcintyre/trade-ledger/releases/latest/download/trade_ledger.zip)
-
-Extract the zip to a folder (for example `C:\Tools\trade_ledger\`) and run `trade_ledger.exe`
-from inside the extracted folder. The folder contains `trade_ledger.exe` alongside the Python
-runtime DLLs it depends on — keep them together.
+From the release's **Assets** section, download `trade_ledger-windows-x64.zip`, then extract it
+to a folder (for example `C:\Tools\trade_ledger\`) and run `trade_ledger.exe` from inside the
+extracted folder. The folder contains `trade_ledger.exe` alongside the Python runtime DLLs it
+depends on — keep them together.
 
 > The build is distributed as a folder rather than a single-file `.exe` so that the Python
 > runtime DLLs (e.g. `python311.dll`, `ucrtbase.dll`) live on disk next to the executable
