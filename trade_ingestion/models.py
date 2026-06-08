@@ -11,7 +11,7 @@ class CanonicalTrade:
     trade_id: str
     underlying: str
     symbol: str
-    open_date: date
+    open_date: date | None
     exp_date: date | None
     call_or_put: str | None
     side: str
@@ -19,10 +19,11 @@ class CanonicalTrade:
     stock_price_open: float | None
     premium: float | None
     quantity: float
-    fees: float
+    fees: float | None
     exit_price: float | None
     close_date: date | None
     account: str
+    stock: str  # Display value for Column A (ticker or display name from UNDERLYING_DISPLAY_MAP)
 
     def __post_init__(self) -> None:
         if not self.trade_id:
@@ -44,7 +45,7 @@ class RawEvent:
     stock_price: float | None
     premium: float | None
     quantity: float
-    fees: float
+    fees: float | None
     effect: str
 
 
@@ -52,13 +53,14 @@ class RawEvent:
 class OpenLot:
     event: RawEvent
     remaining_quantity: float
-    remaining_fees: float
+    remaining_fees: float | None
     split_index: int = field(default=0)
 
 
 def make_trade_id(trade: CanonicalTrade) -> str:
     quantity = f"{trade.quantity:g}"
-    return f"{trade.open_date.isoformat()}|{trade.symbol}|{trade.side}|{quantity}"
+    date_str = trade.open_date.isoformat() if trade.open_date else "no-open"
+    return f"{date_str}|{trade.symbol}|{trade.side}|{quantity}"
 
 
 def make_fallback_lot_id(

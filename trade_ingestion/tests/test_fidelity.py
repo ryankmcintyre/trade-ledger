@@ -23,16 +23,17 @@ Trade Date,Action,Symbol,Quantity,Price,Commission,Fees,Account,Transaction ID,S
     equity_buy, equity_sell, option_buy, option_sell = events
 
     assert equity_buy.lot_id == "EQ-BUY"
-    assert equity_buy.account == "Fidelity:IRA-1"
+    assert equity_buy.account == "Fidelity"
     assert equity_buy.side == "C"
     assert equity_buy.effect == "OPEN"
     assert equity_buy.quantity == 1.0
-    assert equity_buy.fees == 1.5
+    assert equity_buy.fees == 1.0  # Only Commission ($), not Fees ($)
     assert equity_buy.trade_date == date(2024, 1, 2)
 
     assert equity_sell.side == "C"
     assert equity_sell.effect == "CLOSE"
     assert equity_sell.quantity == 1.0
+    assert equity_sell.fees == 1.0  # Only Commission
 
     assert option_buy.symbol == "SPY 240119C00450000"
     assert option_buy.underlying == "SPY"
@@ -41,6 +42,7 @@ Trade Date,Action,Symbol,Quantity,Price,Commission,Fees,Account,Transaction ID,S
     assert option_buy.strike == 450.0
     assert option_buy.side == "B"
     assert option_buy.effect == "OPEN"
+    assert option_buy.fees == 0.65  # Only Commission
 
     assert option_sell.symbol == "SPY 240119C00450000"
     assert option_sell.side == "B"
@@ -84,13 +86,13 @@ def test_parse_fidelity_csv_real_world_column_names_and_verbose_actions() -> Non
     assert equity_buy.side == "C"
     assert equity_buy.premium == 205.0
     assert equity_buy.quantity == pytest.approx(30 / 100)
-    assert equity_buy.fees == 0.0
+    assert equity_buy.fees is None  # No Commission ($) value
 
-    # Long equity sell → CLOSE, side C, fees from Fees ($) column
+    # Long equity sell → CLOSE, side C, no commission
     assert equity_sell.underlying == "SOLS"
     assert equity_sell.effect == "CLOSE"
     assert equity_sell.side == "C"
-    assert equity_sell.fees == pytest.approx(0.19)
+    assert equity_sell.fees is None  # Only Fees ($) present, not Commission
 
     # Option buy to open — compact symbol normalised to OCC format
     assert opt_buy_open.symbol == "SPXW 260618P07400000"
@@ -102,7 +104,7 @@ def test_parse_fidelity_csv_real_world_column_names_and_verbose_actions() -> Non
     assert opt_buy_open.side == "B"
     assert opt_buy_open.premium == pytest.approx(54.07)
     assert opt_buy_open.quantity == 2.0
-    assert opt_buy_open.fees == pytest.approx(0.05)
+    assert opt_buy_open.fees is None  # No Commission ($) value
 
     # Option sell to open (short option)
     assert opt_sell_open.symbol == "SPXW 260618P07410000"
@@ -143,6 +145,9 @@ def test_parse_fidelity_csv_compact_option_symbol_small_strike() -> None:
     assert event.effect == "CLOSE"
     assert event.side == "B"
 
+
+def test_parse_fidelity_csv_with_short_form_actions() -> None:
+    """Short-form actions (Buy, Sell, Buy to Open) with Transaction ID column."""
     content = """Metadata,Value
 Generated,2024-01-01
 Trade Date,Action,Symbol,Quantity,Price,Commission,Fees,Account,Transaction ID,Security Type,Underlying Price
@@ -160,16 +165,12 @@ Trade Date,Action,Symbol,Quantity,Price,Commission,Fees,Account,Transaction ID,S
     equity_buy, equity_sell, option_buy, option_sell = events
 
     assert equity_buy.lot_id == "EQ-BUY"
-    assert equity_buy.account == "Fidelity:IRA-1"
+    assert equity_buy.account == "Fidelity"
     assert equity_buy.side == "C"
     assert equity_buy.effect == "OPEN"
     assert equity_buy.quantity == 1.0
-    assert equity_buy.fees == 1.5
+    assert equity_buy.fees == 1.0  # Only Commission column
     assert equity_buy.trade_date == date(2024, 1, 2)
-
-    assert equity_sell.side == "C"
-    assert equity_sell.effect == "CLOSE"
-    assert equity_sell.quantity == 1.0
 
     assert option_buy.symbol == "SPY 240119C00450000"
     assert option_buy.underlying == "SPY"
@@ -178,7 +179,3 @@ Trade Date,Action,Symbol,Quantity,Price,Commission,Fees,Account,Transaction ID,S
     assert option_buy.strike == 450.0
     assert option_buy.side == "B"
     assert option_buy.effect == "OPEN"
-
-    assert option_sell.symbol == "SPY 240119C00450000"
-    assert option_sell.side == "B"
-    assert option_sell.effect == "CLOSE"

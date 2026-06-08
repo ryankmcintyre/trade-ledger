@@ -4,9 +4,8 @@ import csv
 import io
 import re
 from datetime import date, datetime
-from typing import Iterable
 
-from constants import FIDELITY_BROKER_NAME
+from constants import FIDELITY_BROKER_NAME, UNDERLYING_DISPLAY_MAP
 from trade_ingestion.models import RawEvent, make_fallback_lot_id
 HEADER_REQUIREMENTS = {"Action", "Symbol"}
 DATE_FORMATS = ("%Y-%m-%d", "%m/%d/%Y", "%m/%d/%y")
@@ -86,7 +85,6 @@ def _parse_row(row: dict[str, str | None]) -> RawEvent | None:
     trade_date = _parse_date(_required_value(row, "trade_date"))
     quantity_raw = abs(_parse_float(_required_value(row, "quantity")))
     price = _parse_optional_float(_get_value(row, "price"))
-    account_value = (_get_value(row, "account") or "UNKNOWN").strip()
     security_type = (_get_value(row, "security_type") or "").strip().lower()
 
     if mapping["instrument"] == "option" or "option" in security_type:
@@ -115,7 +113,7 @@ def _parse_row(row: dict[str, str | None]) -> RawEvent | None:
     return RawEvent(
         lot_id=lot_id,
         broker=FIDELITY_BROKER_NAME,
-        account=f"{FIDELITY_BROKER_NAME}:{account_value}",
+        account=FIDELITY_BROKER_NAME,
         underlying=parsed_symbol["underlying"],
         symbol=parsed_symbol["symbol"],
         trade_date=trade_date,
@@ -241,13 +239,14 @@ def _normalize_option_symbol(symbol: str) -> dict[str, object]:
     }
 
 
-def _sum_fees(row: dict[str, str | None]) -> float:
-    return sum(
+def _sum_fees(row: dict[str, str | None]) -> float | None:
+    """Only include Commission ($) in fees — Fees ($) column is excluded per requirements."""
+    total = sum(
         _parse_optional_float(row.get(field)) or 0.0
-        for alias in ("commission", "fees")
-        for field in FIELD_ALIASES[alias]
+        for field in FIELD_ALIASES["commission"]
         if field in row
     )
+    return total if total > 0.0 else None
 
 
 def _parse_date(value: str) -> date:

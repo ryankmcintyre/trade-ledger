@@ -8,7 +8,7 @@ from typing import Callable, Sequence
 from trade_ingestion.adapters import parse_fidelity_csv
 from trade_ingestion.matcher import match_trades_with_summary
 from trade_ingestion.models import RawEvent
-from trade_ingestion.writer import read_existing_lot_ids, write_trades
+from trade_ingestion.writer import write_trades
 
 Adapter = Callable[[str], list[RawEvent]]
 ADAPTERS: dict[str, Adapter] = {
@@ -31,14 +31,13 @@ def run_pipeline(*, broker: str, csv_path: Path, workbook_path: Path) -> Pipelin
 
     csv_content = csv_path.read_text(encoding="utf-8-sig")
     events = adapter(csv_content)
-    existing_lot_ids = read_existing_lot_ids(workbook_path)
-    match_result = match_trades_with_summary(events, existing_lot_ids)
+    match_result = match_trades_with_summary(events)
     written = write_trades(workbook_path, match_result.trades)
-    # NOTE: The writer can still skip matched rows when a legacy workbook already contains the same
-    # trade_id, so any matched-but-not-written rows count as additional dedup skips in the summary.
+    # The writer deduplicates against existing rows using composite keys.
+    skipped = len(match_result.trades) - written
     return PipelineResult(
         rows_ingested=written,
-        rows_skipped=match_result.skipped_duplicates + (len(match_result.trades) - written),
+        rows_skipped=skipped,
         open_positions=match_result.open_positions,
     )
 

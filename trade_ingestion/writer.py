@@ -1,31 +1,43 @@
 from __future__ import annotations
 
+from datetime import date
 from pathlib import Path
-from typing import Any, Sequence
+from typing import Any
 
 import xlwings as xw
 
-from constants import TABLE_NAME, WRITABLE_COLUMNS
+from constants import DEDUP_COLUMNS, FIELD_TO_COLUMN, TABLE_NAME
 from trade_ingestion.models import CanonicalTrade
 
 
-# TODO: The requirements mention reading existing trade_id values, but the matcher and schema use
-# TODO: lot_id as the primary dedup key. The writer therefore prefers lot_id when available and
-# TODO: falls back to trade_id only to avoid duplicate appends in workbooks with legacy layouts.
 def write_trades(workbook_path: Path, trades: list[CanonicalTrade]) -> int:
     workbook, app, was_open = _open_workbook(workbook_path)
     try:
         table = _find_table(workbook, TABLE_NAME)
         headers = _table_headers(table)
-        existing_keys = _existing_dedup_values(table, headers)
-        writable_headers = [header for header in headers if header in WRITABLE_COLUMNS]
-        header_positions = {header: headers.index(header) + 1 for header in writable_headers}
-        pending = [trade for trade in trades if trade.lot_id not in existing_keys and trade.trade_id not in existing_keys]
+        existing_keys = _existing_dedup_keys(table, headers)
+
+        # Build column position map for writable fields
+        header_positions: dict[str, int] = {}
+        for col_name in FIELD_TO_COLUMN.values():
+            if col_name in headers:
+                header_positions[col_name] = headers.index(col_name) + 1
+
+        pending: list[CanonicalTrade] = []
+        for trade in trades:
+            key = _make_dedup_key(trade, headers)
+            if key not in existing_keys:
+                pending.append(trade)
 
         for trade in pending:
             row = table.ListRows.Add()
-            for header in writable_headers:
-                row.Range.Cells(1, header_positions[header]).Value = getattr(trade, header)
+            for field_name, col_name in FIELD_TO_COLUMN.items():
+                if col_name not in header_positions:
+                    continue
+                value = getattr(trade, field_name, None)
+                if value is None:
+                    continue
+                row.Range.Cells(1, header_positions[col_name]).Value = value
 
         workbook.save()
         return len(pending)
@@ -36,24 +48,80 @@ def write_trades(workbook_path: Path, trades: list[CanonicalTrade]) -> int:
 
 
 def read_existing_lot_ids(workbook_path: Path) -> set[str]:
+    """Read composite dedup keys from the workbook. Returns a set of tuples as strings."""
     workbook, app, was_open = _open_workbook(workbook_path)
     try:
         table = _find_table(workbook, TABLE_NAME)
         headers = _table_headers(table)
-        if "lot_id" not in headers:
-            return set()
-
-        lot_index = headers.index("lot_id")
-        data_range = getattr(table, "DataBodyRange", None)
-        if data_range is None or data_range.Value in (None, ""):
-            return set()
-
-        rows = _normalize_table_rows(data_range.Value, len(headers))
-        return {str(row[lot_index]) for row in rows if row[lot_index] not in (None, "")}
+        return _existing_dedup_keys(table, headers)
     finally:
         if not was_open:
             workbook.close()
             app.quit()
+
+
+def _make_dedup_key(trade: CanonicalTrade, headers: list[str]) -> str:
+    """Build a composite dedup key from trade fields matching DEDUP_COLUMNS."""
+    parts: list[str] = []
+    for col_name in DEDUP_COLUMNS:
+        if col_name == "Stock":
+            parts.append(str(trade.stock or ""))
+        elif col_name == "Open Date":
+            parts.append(trade.open_date.isoformat() if trade.open_date else "")
+        elif col_name == "B/S":
+            parts.append(trade.side or "")
+        elif col_name == "C":
+            parts.append(f"{trade.quantity:g}")
+    return "|".join(parts)
+
+
+def _existing_dedup_keys(table: Any, headers: list[str]) -> set[str]:
+    """Read existing rows and build composite dedup keys."""
+    values: set[str] = set()
+    data_range = getattr(table, "DataBodyRange", None)
+    if data_range is None or data_range.Value in (None, ""):
+        return values
+
+    rows = _normalize_table_rows(data_range.Value, len(headers))
+
+    # Find column indices for dedup columns
+    col_indices: dict[str, int | None] = {}
+    for col_name in DEDUP_COLUMNS:
+        col_indices[col_name] = headers.index(col_name) if col_name in headers else None
+
+    for row in rows:
+        parts: list[str] = []
+        for col_name in DEDUP_COLUMNS:
+            idx = col_indices[col_name]
+            if idx is None:
+                parts.append("")
+                continue
+            val = row[idx]
+            if val is None or val == "":
+                parts.append("")
+            elif col_name == "Open Date" and isinstance(val, (int, float)):
+                # Excel serial date — convert to ISO format for comparison
+                d = _excel_serial_to_date(val)
+                parts.append(d.isoformat() if d else "")
+            elif col_name == "C":
+                parts.append(f"{float(val):g}")
+            else:
+                parts.append(str(val))
+        key = "|".join(parts)
+        if any(p for p in parts):
+            values.add(key)
+
+    return values
+
+
+def _excel_serial_to_date(serial: float) -> date | None:
+    """Convert Excel serial number to Python date."""
+    try:
+        from datetime import datetime, timedelta
+        base = datetime(1899, 12, 30)
+        return (base + timedelta(days=int(serial))).date()
+    except (ValueError, OverflowError):
+        return None
 
 
 def _open_workbook(workbook_path: Path) -> tuple[Any, Any, bool]:
@@ -96,23 +164,6 @@ def _table_headers(table: Any) -> list[str]:
             return [str(value) for value in header_values[0]]
         return [str(value) for value in header_values]
     return [str(header_values)]
-
-
-def _existing_dedup_values(table: Any, headers: Sequence[str]) -> set[str]:
-    values: set[str] = set()
-    data_range = getattr(table, "DataBodyRange", None)
-    if data_range is None or data_range.Value in (None, ""):
-        return values
-
-    rows = _normalize_table_rows(data_range.Value, len(headers))
-    lot_index = headers.index("lot_id") if "lot_id" in headers else None
-    trade_index = headers.index("trade_id") if "trade_id" in headers else None
-    for row in rows:
-        if lot_index is not None and row[lot_index] not in (None, ""):
-            values.add(str(row[lot_index]))
-        if trade_index is not None and row[trade_index] not in (None, ""):
-            values.add(str(row[trade_index]))
-    return values
 
 
 def _normalize_table_rows(raw_value: Any, width: int) -> list[list[Any]]:
