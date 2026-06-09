@@ -21,7 +21,7 @@ def test_run_pipeline_uses_broker_adapter_and_writer(monkeypatch: Any, tmp_path:
         RawEvent(
             lot_id="lot-1",
             broker="Fidelity",
-            account="Fidelity:IRA",
+            account="Fidelity",
             underlying="AAPL",
             symbol="AAPL",
             trade_date=__import__("datetime").date(2024, 1, 2),
@@ -32,7 +32,7 @@ def test_run_pipeline_uses_broker_adapter_and_writer(monkeypatch: Any, tmp_path:
             stock_price=180.0,
             premium=180.0,
             quantity=1.0,
-            fees=0.0,
+            fees=None,
             effect="OPEN",
         )
     ]
@@ -50,10 +50,11 @@ def test_run_pipeline_uses_broker_adapter_and_writer(monkeypatch: Any, tmp_path:
             stock_price_open=180.0,
             premium=180.0,
             quantity=1.0,
-            fees=0.0,
+            fees=None,
             exit_price=None,
             close_date=None,
-            account="Fidelity:IRA",
+            account="Fidelity",
+            stock="AAPL",
         )
     ]
 
@@ -61,14 +62,9 @@ def test_run_pipeline_uses_broker_adapter_and_writer(monkeypatch: Any, tmp_path:
         captured["content"] = content
         return events
 
-    def fake_read_existing_lot_ids(path: Path) -> set[str]:
-        captured["dedup_path"] = path
-        return {"existing-lot"}
-
-    def fake_match_trades(input_events: list[RawEvent], existing_lot_ids: set[str]) -> MatchResult:
+    def fake_match_trades(input_events: list[RawEvent], existing_lot_ids: set[str] | None = None) -> MatchResult:
         captured["events"] = input_events
-        captured["existing_lot_ids"] = existing_lot_ids
-        return MatchResult(trades=trades, skipped_duplicates=2, open_positions=1)
+        return MatchResult(trades=trades, skipped_duplicates=0, open_positions=1)
 
     def fake_write_trades(path: Path, input_trades: list[CanonicalTrade]) -> int:
         captured["write_path"] = path
@@ -76,17 +72,14 @@ def test_run_pipeline_uses_broker_adapter_and_writer(monkeypatch: Any, tmp_path:
         return len(input_trades)
 
     monkeypatch.setitem(main.ADAPTERS, "fake", fake_adapter)
-    monkeypatch.setattr(main, "read_existing_lot_ids", fake_read_existing_lot_ids)
     monkeypatch.setattr(main, "match_trades_with_summary", fake_match_trades)
     monkeypatch.setattr(main, "write_trades", fake_write_trades)
 
     result = main.run_pipeline(broker="fake", csv_path=csv_path, workbook_path=workbook_path)
 
-    assert result == main.PipelineResult(rows_ingested=1, rows_skipped=2, open_positions=1)
+    assert result == main.PipelineResult(rows_ingested=1, rows_skipped=0, open_positions=1)
     assert captured["content"] == "example"
-    assert captured["dedup_path"] == workbook_path
     assert captured["events"] == events
-    assert captured["existing_lot_ids"] == {"existing-lot"}
     assert captured["write_path"] == workbook_path
     assert captured["trades"] == trades
 

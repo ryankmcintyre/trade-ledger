@@ -20,7 +20,8 @@ def test_make_trade_id_for_option_trade() -> None:
         fees=1.3,
         exit_price=3.0,
         close_date=date(2023, 9, 8),
-        account="Fidelity:IRA",
+        account="Fidelity",
+        stock="SPY",
     )
 
     assert make_trade_id(trade) == "2023-09-01|SPY 230915C00450000|B|1"
@@ -44,7 +45,8 @@ def test_make_trade_id_for_equity_trade() -> None:
         fees=0.65,
         exit_price=193.0,
         close_date=date(2023, 8, 2),
-        account="Fidelity:IRA",
+        account="Fidelity",
+        stock="AAPL",
     )
 
     assert make_trade_id(trade) == "2023-08-01|AAPL|C|1"
@@ -64,10 +66,35 @@ def test_make_trade_id_with_optional_fields_missing() -> None:
         stock_price_open=None,
         premium=None,
         quantity=2.5,
-        fees=0.0,
+        fees=None,
         exit_price=None,
         close_date=None,
-        account="Fidelity:TAXABLE",
+        account="Fidelity",
+        stock="MSFT",
     )
 
     assert make_trade_id(trade) == "2023-07-01|MSFT|C|2.5"
+
+
+def test_make_trade_id_orphan_close_no_open_date() -> None:
+    trade = CanonicalTrade(
+        lot_id="lot-4",
+        trade_id="",
+        underlying="SOLS",
+        symbol="SOLS",
+        open_date=None,
+        exp_date=None,
+        call_or_put=None,
+        side="C",
+        strike=None,
+        stock_price_open=None,
+        premium=None,
+        quantity=1.0,
+        fees=None,
+        exit_price=86.3,
+        close_date=date(2026, 5, 27),
+        account="Fidelity",
+        stock="SOLS",
+    )
+
+    assert make_trade_id(trade) == "no-open|SOLS|C|1"
