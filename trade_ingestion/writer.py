@@ -48,7 +48,7 @@ def write_trades(workbook_path: Path, trades: list[CanonicalTrade]) -> int:
 
 
 def read_existing_lot_ids(workbook_path: Path) -> set[str]:
-    """Read composite dedup keys from the workbook. Returns a set of tuples as strings."""
+    """DEPRECATED: read existing composite dedup keys as pipe-delimited strings."""
     workbook, app, was_open = _open_workbook(workbook_path)
     try:
         table = _find_table(workbook, TABLE_NAME)
