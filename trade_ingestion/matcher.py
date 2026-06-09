@@ -22,7 +22,7 @@ def match_trades(events: list[RawEvent]) -> list[CanonicalTrade]:
     return match_trades_with_summary(events).trades
 
 
-def match_trades_with_summary(events: list[RawEvent], existing_lot_ids: set[str] | None = None) -> MatchResult:
+def match_trades_with_summary(events: list[RawEvent]) -> MatchResult:
     aggregated = _pre_aggregate(events)
     open_lots: dict[tuple[str, str, str], Deque[OpenLot]] = defaultdict(deque)
     results: list[CanonicalTrade] = []
