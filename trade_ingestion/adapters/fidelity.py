@@ -5,7 +5,7 @@ import io
 import re
 from datetime import date, datetime
 
-from constants import FIDELITY_BROKER_NAME, UNDERLYING_DISPLAY_MAP
+from constants import FIDELITY_BROKER_NAME
 from trade_ingestion.models import RawEvent, make_fallback_lot_id
 HEADER_REQUIREMENTS = {"Action", "Symbol"}
 DATE_FORMATS = ("%Y-%m-%d", "%m/%d/%Y", "%m/%d/%y")
