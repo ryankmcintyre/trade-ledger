@@ -105,6 +105,8 @@ def _existing_dedup_keys(table: Any, headers: list[str]) -> set[str]:
                 parts.append(d.isoformat() if d else "")
             elif col_name == "C":
                 parts.append(f"{float(val):g}")
+            elif col_name == "Open Date" and hasattr(val, "date") and callable(getattr(val, "date", None)):
+                parts.append(val.date().isoformat())
             else:
                 parts.append(str(val))
         key = "|".join(parts)
