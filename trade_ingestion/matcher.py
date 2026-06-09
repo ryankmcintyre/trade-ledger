@@ -18,8 +18,8 @@ class MatchResult:
     open_positions: int
 
 
-def match_trades(events: list[RawEvent], existing_lot_ids: set[str] | None = None) -> list[CanonicalTrade]:
-    return match_trades_with_summary(events, existing_lot_ids).trades
+def match_trades(events: list[RawEvent]) -> list[CanonicalTrade]:
+    return match_trades_with_summary(events).trades
 
 
 def match_trades_with_summary(events: list[RawEvent], existing_lot_ids: set[str] | None = None) -> MatchResult:
