@@ -113,7 +113,7 @@ def _pre_aggregate(events: list[RawEvent]) -> list[RawEvent]:
         # Weighted average premium
         premiums_with_qty = [(e.premium or 0.0, e.quantity) for e in group_events]
         total_premium_value = sum(p * q for p, q in premiums_with_qty)
-        avg_premium = total_premium_value / total_qty if total_qty > 0 else None
+        avg_premium = None if any(e.premium is None for e in group_events) else (total_premium_value / total_qty if total_qty > 0 else None)
         # Round to avoid floating point noise
         if avg_premium is not None:
             avg_premium = round(avg_premium, 10)
