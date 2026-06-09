@@ -28,6 +28,7 @@ def match_trades_with_summary(events: list[RawEvent]) -> MatchResult:
     results: list[CanonicalTrade] = []
     open_positions = 0
 
+    # TODO: Closes are matched FIFO within (account, symbol, side) due to missing broker open-lot references.
     for event in sorted(aggregated, key=_event_sort_key):
         key = (event.account, event.symbol, event.side)
         if event.effect == "OPEN":
