@@ -103,12 +103,14 @@ def test_fidelity_fixture_matches_expected_canonical_trades() -> None:
     assert result.open_positions == 4
     assert Counter(_row(trade) for trade in result.trades) == Counter(expected)
 
-    nok_trade = next(trade for trade in result.trades if trade.stock == "NOK")
+    nok_trade = next(trade for trade in result.trades if trade.underlying == "NOK")
+    assert nok_trade.stock == "NOK"
     assert nok_trade.underlying == "NOK"
     assert nok_trade.symbol == "NOK 261016C00016000"
 
-    spxw_trades = [trade for trade in result.trades if trade.stock == "S&P 500 INDEX"]
+    spxw_trades = [trade for trade in result.trades if trade.underlying == "SPXW"]
     assert len(spxw_trades) == 2
+    assert {trade.stock for trade in spxw_trades} == {"S&P 500 INDEX"}
     assert {trade.underlying for trade in spxw_trades} == {"SPXW"}
     assert {trade.symbol for trade in spxw_trades} == {
         "SPXW 260618P07400000",
