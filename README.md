@@ -83,7 +83,7 @@ Ingested 12 trade rows to /Users/ryan/trades/ledger.xlsx; skipped 3 duplicate ro
 ```
 
 - **Ingested** — new rows written to `tbl_trades`
-- **Skipped** — rows already present in the workbook (deduplicated by `lot_id`)
+- **Skipped** — rows already present in the workbook (deduplicated by composite key: Stock + Open Date + B/S + Quantity)
 - **Open positions** — trades with no matching close event in the imported file (written as open rows with blank `exit_price` and `close_date`)
 
 ---
@@ -99,7 +99,7 @@ Parses Fidelity transaction history CSV exports. The adapter handles:
 - Metadata rows and footer disclaimer text at the top/bottom of the file are skipped automatically
 - Option symbols are normalised to OCC format from Fidelity's compact notation (e.g. `-SPXW260618P7400` → `SPXW 260618P07400000`)
 - Date formats accepted: `YYYY-MM-DD`, `MM/DD/YYYY`, `MM/DD/YY`
-- Fees are summed across all commission and fee columns (`Commission ($)` / `Fees ($)`)
+- Fees include only the `Commission ($)` column (the `Fees ($)` column is excluded)
 
 To export from Fidelity: **Accounts & Trade → Activity & Orders → History** → select a date range → **Download**.
 
@@ -108,9 +108,10 @@ To export from Fidelity: **Accounts & Trade → Activity & Orders → History** 
 ## How it works
 
 1. The adapter parses the CSV into a list of raw trade events (one buy or sell per row).
-2. The matcher pairs open and close events FIFO within each `(account, symbol, side)` group into complete trade rows. Partial closes produce two rows: one matched, one remaining open.
-3. The writer reads existing `lot_id` values from `tbl_trades` to skip duplicates, then appends new rows.
-4. Formula-driven columns (`current_stock_price`, `break_even_price`, `dte`, `profit_loss`, `days_held`, `return_on_capital`, `status`) are never written — they remain owned by Excel.
+2. Same-day events for the same symbol/side/effect are pre-aggregated (weighted-average pricing, summed quantities).
+3. The matcher pairs open and close events FIFO within each `(account, symbol, side)` group into complete trade rows. Partial closes produce two rows: one matched, one remaining open. Sells without a matching open produce close-only rows.
+4. The writer reads existing rows from `tbl_trades` to skip duplicates (composite key: Stock + Open Date + B/S + Quantity), then appends new rows.
+5. Formula-driven columns are never written — they remain owned by Excel.
 
 ---
 
