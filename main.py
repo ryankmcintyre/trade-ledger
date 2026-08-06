@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Sequence
 
-from trade_ingestion.adapters import parse_fidelity_csv
+from trade_ingestion.adapters import parse_fidelity_csv, parse_robinhood_csv
 from trade_ingestion.matcher import match_trades_with_summary
 from trade_ingestion.models import RawEvent
 from trade_ingestion.writer import write_trades
@@ -13,6 +13,7 @@ from trade_ingestion.writer import write_trades
 Adapter = Callable[[str], list[RawEvent]]
 ADAPTERS: dict[str, Adapter] = {
     "fidelity": parse_fidelity_csv,
+    "robinhood": parse_robinhood_csv,
 }
 
 
@@ -44,8 +45,10 @@ def run_pipeline(*, broker: str, csv_path: Path, workbook_path: Path, sheet_name
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Ingest broker trade CSVs into the trade ledger workbook.")
-    parser.add_argument("broker", help="Broker adapter name, for example: fidelity")
-    parser.add_argument("csv_path", type=Path, help="Path to the broker export CSV file")
+    parser.add_argument("broker_pos", nargs="?", help="Broker adapter name, for example: fidelity")
+    parser.add_argument("csv_pos", nargs="?", type=Path, help="Path to the broker export CSV file")
+    parser.add_argument("--broker", dest="broker_flag", help="Broker adapter name, for example: fidelity")
+    parser.add_argument("--csv", dest="csv_flag", type=Path, help="Path to the broker export CSV file")
     parser.add_argument(
         "--workbook",
         type=Path,
@@ -62,9 +65,14 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
+    broker = args.broker_flag or args.broker_pos
+    csv_path = args.csv_flag or args.csv_pos
+    if broker is None or csv_path is None:
+        raise SystemExit("broker and csv_path are required")
+
     result = run_pipeline(
-        broker=args.broker,
-        csv_path=args.csv_path,
+        broker=broker,
+        csv_path=csv_path,
         workbook_path=args.workbook,
         sheet_name=args.sheet,
     )
