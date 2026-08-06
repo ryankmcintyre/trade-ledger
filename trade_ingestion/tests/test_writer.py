@@ -299,3 +299,23 @@ def test_write_trades_uses_only_the_named_sheet(monkeypatch: Any, tmp_path: Path
     assert written == 1
     assert len(target_table.added_rows) == 1
     assert len(other_table.added_rows) == 0
+
+
+def test_write_trades_rejects_missing_table_on_sheet(monkeypatch: Any, tmp_path: Path) -> None:
+    workbook_path = tmp_path / "ledger.xlsx"
+    workbook_path.write_text("placeholder", encoding="utf-8")
+
+    class EmptySheetApi:
+        def ListObjects(self, name: str) -> Any:
+            raise KeyError(name)
+
+    table = FakeTable(["Stock", "Open Date", "B/S", "C"], [])
+    app = FakeApp([])
+    book = FakeBook(str(workbook_path.resolve()), table, app)
+    book.sheets[0].api = EmptySheetApi()
+    app.books.append(book)
+
+    monkeypatch.setattr(writer, "xw", FakeXw(app))
+
+    with pytest.raises(ValueError, match=f"Could not find table '{TABLE_NAME}' on worksheet '{SHEET_NAME}'"):
+        writer.write_trades(workbook_path, SHEET_NAME, [_trade()])
