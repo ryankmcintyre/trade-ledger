@@ -68,7 +68,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     broker = args.broker_flag or args.broker_pos
     csv_path = args.csv_flag or args.csv_pos
     if broker is None or csv_path is None:
-        raise SystemExit("broker and csv_path are required")
+        raise SystemExit("broker and csv_path are required; supply them as positional arguments or via --broker / --csv")
 
     result = run_pipeline(
         broker=broker,

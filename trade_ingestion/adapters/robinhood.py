@@ -42,13 +42,15 @@ def parse_robinhood_csv(content: str) -> list[RawEvent]:
     if header_index is None:
         raise RobinhoodParseError("Could not locate Robinhood header row")
 
-    empty_before_header = sum(1 for row in rows[:header_index] if not row)
-    reader = csv.DictReader(io.StringIO(content), fieldnames=rows[header_index])
-    for _ in range(header_index - empty_before_header + 1):
-        next(reader, None)
-
+    headers = [cell.strip() for cell in rows[header_index]]
     events: list[RawEvent] = []
-    for row in reader:
+    for row_values in rows[header_index + 1 :]:
+        if not row_values or not any(cell.strip() for cell in row_values):
+            continue
+        row = {
+            headers[index]: (row_values[index].strip() if index < len(row_values) else None)
+            for index in range(len(headers))
+        }
         event = _parse_row(row)
         if event is not None:
             events.append(event)
@@ -102,7 +104,7 @@ def _parse_row(row: dict[str, str | None]) -> RawEvent | None:
             "call_or_put": None,
             "strike": None,
         }
-        normalized_quantity = quantity / 100.0 if quantity > 0 else quantity / 100.0
+        normalized_quantity = quantity / 100.0
 
     lot_id = (_get_value(row, "transaction_id") or "").strip() or make_fallback_lot_id(
         trade_date=trade_date,
@@ -149,14 +151,19 @@ def _classify_action(action: str) -> dict[str, str] | None:
     if any(token in normalized for token in ("dividend", "interest", "deposit", "withdraw", "transfer", "assignment", "expiration", "expire", "cash", "market to market")):
         return None
 
-    if any(token in normalized for token in ("buy to open", "buy open")):
-        return {"effect": "OPEN", "side": "B", "instrument": "option"}
-    if any(token in normalized for token in ("sell to open", "sell open", "short", "short sale")):
-        return {"effect": "OPEN", "side": "S", "instrument": "option"}
-    if any(token in normalized for token in ("buy to close", "buy close")):
-        return {"effect": "CLOSE", "side": "S", "instrument": "option"}
-    if any(token in normalized for token in ("sell to close", "sell close")):
-        return {"effect": "CLOSE", "side": "B", "instrument": "option"}
+    option_markers = ("buy to open", "sell to open", "buy to close", "sell to close", "option", "call", "put")
+    if any(token in normalized for token in option_markers):
+        if any(token in normalized for token in ("buy to open", "buy open")):
+            return {"effect": "OPEN", "side": "B", "instrument": "option"}
+        if any(token in normalized for token in ("sell to open", "sell open")):
+            return {"effect": "OPEN", "side": "S", "instrument": "option"}
+        if any(token in normalized for token in ("buy to close", "buy close")):
+            return {"effect": "CLOSE", "side": "B", "instrument": "option"}
+        if any(token in normalized for token in ("sell to close", "sell close")):
+            return {"effect": "CLOSE", "side": "S", "instrument": "option"}
+
+    if any(token in normalized for token in ("short", "short sale", "sell short")):
+        return {"effect": "OPEN", "side": "S", "instrument": "equity"}
 
     if any(token in normalized for token in ("buy", "bought", "purchase")):
         if "cover" in normalized:
@@ -220,14 +227,14 @@ def _normalize_equity_symbol(symbol: str) -> str:
     return symbol.split()[0].strip() if symbol.split() else symbol.strip()
 
 
-def _sum_fees(row: dict[str, str | None]) -> float | None:
+def _sum_fees(row: dict[str, str | None]) -> float:
     total = 0.0
     seen = False
     for field in tuple(FIELD_ALIASES["commission"]) + tuple(FIELD_ALIASES["fees"]):
         if field in row and row[field] not in (None, ""):
             total += _parse_optional_float(row[field]) or 0.0
             seen = True
-    return total if seen and total > 0.0 else None
+    return total if seen else 0.0
 
 
 def _parse_date(value: str) -> date:
