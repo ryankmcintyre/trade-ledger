@@ -156,6 +156,29 @@ def test_parse_fidelity_csv_compact_option_symbol_small_strike() -> None:
     assert event.side == "B"
 
 
+def test_parse_fidelity_csv_accepts_compact_option_symbol_without_leading_dash() -> None:
+    content = (
+        "\n"
+        "Run Date,Action,Symbol,Description,Type,Price ($),Quantity,Commission ($),Fees ($),"
+        "Accrued Interest ($),Amount ($),Cash Balance ($),Settlement Date\n"
+        '08/07/2026,"YOU BOUGHT OPENING TRANSACTION PUT (NVDL) NUVOTON TECHNOLOGY INC ADR '
+        'AUG 07 26 $26 (100 SHS) (Cash)",NVDL260807P26,"PUT (NVDL)...",Cash,2.15,1,,0.05,,'
+        "-215,,08/08/2026\n"
+    )
+
+    events = parse_fidelity_csv(content)
+
+    assert len(events) == 1
+    event = events[0]
+    assert event.symbol == "NVDL 260807P00026000"
+    assert event.underlying == "NVDL"
+    assert event.exp_date == date(2026, 8, 7)
+    assert event.call_or_put == "P"
+    assert event.strike == pytest.approx(26.0)
+    assert event.effect == "OPEN"
+    assert event.side == "B"
+
+
 def test_parse_fidelity_csv_with_short_form_actions() -> None:
     """Short-form actions (Buy, Sell, Buy to Open) with Transaction ID column."""
     content = """Metadata,Value
