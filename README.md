@@ -103,6 +103,25 @@ Parses Fidelity transaction history CSV exports. The adapter handles:
 
 To export from Fidelity: **Accounts & Trade → Activity & Orders → History** → select a date range → **Download**.
 
+#### Input file requirements
+
+- **File extension:** `.csv`
+- **Encoding:** UTF-8 or UTF-8 with BOM
+- **Header row:** can appear after metadata rows; the importer scans for the first row containing at least `Action` and `Symbol`
+- **Column ordering:** flexible (columns may appear in any order)
+- **Required fields (via supported aliases):**
+  - Trade date: `Run Date` / `Trade Date` / `Date` / `Settlement Date`
+  - Action: `Action` / `Transaction Type` / `Type`
+  - Symbol: `Symbol` / `Description`
+  - Quantity: `Quantity` / `Qty`
+- **Optional fields used when present (via supported aliases):**
+  - Price: `Price ($)` / `Price` / `Net Amount Per Share` / `Amount`
+  - Commission/fees: `Commission ($)` / `Commission`
+  - Account: `Account` / `Account Number`
+  - Transaction ID: `Transaction ID` / `Reference Number` / `Trade ID`
+  - Security type: `Security Type` / `Type Detail`
+  - Underlying price: `Underlying Price` / `Underlying Last Price`
+
 ---
 
 ## How it works
