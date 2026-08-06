@@ -10,10 +10,10 @@ from constants import DEDUP_COLUMNS, FIELD_TO_COLUMN, TABLE_NAME
 from trade_ingestion.models import CanonicalTrade
 
 
-def write_trades(workbook_path: Path, trades: list[CanonicalTrade]) -> int:
+def write_trades(workbook_path: Path, sheet_name: str, trades: list[CanonicalTrade]) -> int:
     workbook, app, was_open = _open_workbook(workbook_path)
     try:
-        table = _find_table(workbook, TABLE_NAME)
+        table = _find_table(workbook, sheet_name, TABLE_NAME)
         headers = _table_headers(table)
         existing_keys = _existing_dedup_keys(table, headers)
 
@@ -47,11 +47,11 @@ def write_trades(workbook_path: Path, trades: list[CanonicalTrade]) -> int:
             app.quit()
 
 
-def read_existing_lot_ids(workbook_path: Path) -> set[str]:
+def read_existing_lot_ids(workbook_path: Path, sheet_name: str) -> set[str]:
     """DEPRECATED: read existing composite dedup keys as pipe-delimited strings."""
     workbook, app, was_open = _open_workbook(workbook_path)
     try:
-        table = _find_table(workbook, TABLE_NAME)
+        table = _find_table(workbook, sheet_name, TABLE_NAME)
         headers = _table_headers(table)
         return _existing_dedup_keys(table, headers)
     finally:
@@ -146,13 +146,27 @@ def _find_open_book(resolved_path: str) -> Any | None:
     return None
 
 
-def _find_table(workbook: Any, table_name: str) -> Any:
+def _find_table(workbook: Any, sheet_name: str, table_name: str) -> Any:
+    sheet = _find_sheet(workbook, sheet_name)
+    try:
+        return sheet.api.ListObjects(table_name)
+    except Exception as exc:
+        raise ValueError(
+            f"Could not find table {table_name!r} on worksheet {sheet_name!r}"
+        ) from exc
+
+
+def _find_sheet(workbook: Any, sheet_name: str) -> Any:
+    available: list[str] = []
     for sheet in workbook.sheets:
-        try:
-            return sheet.api.ListObjects(table_name)
-        except Exception:
-            continue
-    raise ValueError(f"Could not find table {table_name!r}")
+        name = str(sheet.name)
+        available.append(name)
+        if name.casefold() == sheet_name.casefold():
+            return sheet
+    known = ", ".join(repr(name) for name in available) or "none"
+    raise ValueError(
+        f"Could not find worksheet {sheet_name!r} in the workbook. Available worksheets: {known}"
+    )
 
 
 def _table_headers(table: Any) -> list[str]:

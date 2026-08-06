@@ -100,18 +100,18 @@ each with their own `lot_id`. Never merge or average same-day adds.
 
 ### `writer.py`
 - Uses `xlwings` exclusively — no other Excel library
-- Opens the workbook, locates `tbl_trades` by table name
+- Opens the workbook, locates `tbl_trades` by table name on the caller-specified worksheet
 - Reads existing `lot_id` column to build the dedup set passed to the matcher
 - Appends new rows in correct column order
 - Never writes to formula-driven columns: `current_stock_price`, `break_even_price`, `dte`,
   `profit_loss`, `days_held`, `return_on_capital`, `status`
 - Does not close the workbook if it was already open when the script started — check xlwings app state
-- Entry point: `write_trades(workbook_path: Path, trades: list[CanonicalTrade]) -> int`
+- Entry point: `write_trades(workbook_path: Path, sheet_name: str, trades: list[CanonicalTrade]) -> int`
   returns count of rows written
 
 ### `main.py`
 - CLI entry point using `argparse`
-- Arguments: `--broker [fidelity|robinhood]`, `--csv <path>`, `--workbook <path>`
+- Arguments: `--broker [fidelity|robinhood]`, `--csv <path>`, `--workbook <path>`, `--sheet <name>`
 - Runs the full pipeline: adapter → matcher → writer
 - Prints a summary on completion: rows ingested, rows skipped (dedup), open positions left unmatched
 
