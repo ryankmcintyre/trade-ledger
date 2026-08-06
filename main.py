@@ -23,7 +23,7 @@ class PipelineResult:
     open_positions: int
 
 
-def run_pipeline(*, broker: str, csv_path: Path, workbook_path: Path) -> PipelineResult:
+def run_pipeline(*, broker: str, csv_path: Path, workbook_path: Path, sheet_name: str) -> PipelineResult:
     adapter = ADAPTERS.get(broker.strip().lower())
     if adapter is None:
         supported = ", ".join(sorted(ADAPTERS))
@@ -32,7 +32,7 @@ def run_pipeline(*, broker: str, csv_path: Path, workbook_path: Path) -> Pipelin
     csv_content = csv_path.read_text(encoding="utf-8-sig")
     events = adapter(csv_content)
     match_result = match_trades_with_summary(events)
-    written = write_trades(workbook_path, match_result.trades)
+    written = write_trades(workbook_path, sheet_name, match_result.trades)
     # The writer deduplicates against existing rows using composite keys.
     skipped = len(match_result.trades) - written
     return PipelineResult(
@@ -52,15 +52,25 @@ def build_parser() -> argparse.ArgumentParser:
         required=True,
         help="Path to the Excel workbook containing tbl_trades",
     )
+    parser.add_argument(
+        "--sheet",
+        required=True,
+        help="Name of the worksheet inside the workbook that contains the tbl_trades table",
+    )
     return parser
 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    result = run_pipeline(broker=args.broker, csv_path=args.csv_path, workbook_path=args.workbook)
+    result = run_pipeline(
+        broker=args.broker,
+        csv_path=args.csv_path,
+        workbook_path=args.workbook,
+        sheet_name=args.sheet,
+    )
     open_label = "open position" if result.open_positions == 1 else "open positions"
     print(
-        f"Ingested {result.rows_ingested} trade rows to {args.workbook}; "
+        f"Ingested {result.rows_ingested} trade rows to {args.workbook} [{args.sheet}]; "
         f"skipped {result.rows_skipped} duplicate rows; "
         f"left {result.open_positions} {open_label} unmatched"
     )

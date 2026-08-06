@@ -26,13 +26,13 @@ Excel is still required on the machine because `xlwings` uses Excel via COM auto
 **Usage:**
 
 ```
-trade_ledger.exe <broker> <csv_path> --workbook <workbook_path>
+trade_ledger.exe <broker> <csv_path> --workbook <workbook_path> --sheet <sheet_name>
 ```
 
 **Example:**
 
 ```
-trade_ledger.exe fidelity "C:\Downloads\History.csv" --workbook "C:\trades\ledger.xlsx"
+trade_ledger.exe fidelity "C:\Downloads\History.csv" --workbook "C:\trades\ledger.xlsx" --sheet "Trades"
 ```
 
 ---
@@ -61,7 +61,7 @@ pip install -r requirements.txt -r requirements-dev.txt
 ## Usage
 
 ```
-python main.py <broker> <csv_path> --workbook <workbook_path>
+python main.py <broker> <csv_path> --workbook <workbook_path> --sheet <sheet_name>
 ```
 
 | Argument | Description |
@@ -69,17 +69,18 @@ python main.py <broker> <csv_path> --workbook <workbook_path>
 | `broker` | Broker adapter name (see [Supported brokers](#supported-brokers)) |
 | `csv_path` | Path to the broker-exported CSV file |
 | `--workbook` | Path to the Excel workbook containing `tbl_trades` |
+| `--sheet` | Name of the worksheet inside the workbook that holds the `tbl_trades` table (required — a workbook may contain several sheets with a table of that name) |
 
 **Example:**
 
 ```bash
-python main.py fidelity ~/Downloads/History.csv --workbook ~/trades/ledger.xlsx
+python main.py fidelity ~/Downloads/History.csv --workbook ~/trades/ledger.xlsx --sheet Trades
 ```
 
 **Output:**
 
 ```
-Ingested 12 trade rows to /Users/ryan/trades/ledger.xlsx; skipped 3 duplicate rows; left 2 open positions unmatched
+Ingested 12 trade rows to /Users/ryan/trades/ledger.xlsx [Trades]; skipped 3 duplicate rows; left 2 open positions unmatched
 ```
 
 - **Ingested** — new rows written to `tbl_trades`
@@ -132,7 +133,7 @@ To export from Fidelity: **Accounts & Trade → Activity & Orders → History** 
 1. The adapter parses the CSV into a list of raw trade events (one buy or sell per row).
 2. Same-day events for the same symbol/side/effect are pre-aggregated (weighted-average pricing, summed quantities).
 3. The matcher pairs open and close events FIFO within each `(account, symbol, side)` group into complete trade rows. Partial closes produce two rows: one matched, one remaining open. Sells without a matching open produce close-only rows.
-4. The writer reads existing rows from `tbl_trades` to skip duplicates (composite key: Stock + Open Date + B/S + Quantity), then appends new rows.
+4. The writer locates `tbl_trades` on the worksheet named by `--sheet`, reads existing rows to skip duplicates (composite key: Stock + Open Date + B/S + Quantity), then appends new rows.
 5. Formula-driven columns are never written — they remain owned by Excel.
 
 ---

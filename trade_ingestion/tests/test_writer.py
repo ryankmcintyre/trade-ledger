@@ -4,9 +4,13 @@ from datetime import date
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from constants import TABLE_NAME
 import trade_ingestion.writer as writer
 from trade_ingestion.models import CanonicalTrade
+
+SHEET_NAME = "Trades"
 
 
 class FakeCell:
@@ -70,8 +74,9 @@ class FakeSheetApi:
 
 
 class FakeSheet:
-    def __init__(self, table: FakeTable) -> None:
+    def __init__(self, table: FakeTable, name: str = SHEET_NAME) -> None:
         self.api = FakeSheetApi(table)
+        self.name = name
 
 
 class FakeBooks(list):
@@ -80,9 +85,9 @@ class FakeBooks(list):
 
 
 class FakeBook:
-    def __init__(self, fullname: str, table: FakeTable, app: "FakeApp") -> None:
+    def __init__(self, fullname: str, table: FakeTable, app: "FakeApp", sheet_name: str = SHEET_NAME) -> None:
         self.fullname = fullname
-        self.sheets = [FakeSheet(table)]
+        self.sheets = [FakeSheet(table, sheet_name)]
         self.app = app
         self.saved = False
         self.closed = False
@@ -152,7 +157,7 @@ def test_write_trades_uses_column_mapping(monkeypatch: Any, tmp_path: Path) -> N
     monkeypatch.setattr(writer, "xw", FakeXw(app))
 
     trade = _trade()
-    written = writer.write_trades(workbook_path, [trade])
+    written = writer.write_trades(workbook_path, SHEET_NAME, [trade])
 
     assert written == 1
     assert book.saved is True
@@ -202,7 +207,7 @@ def test_write_trades_dedup_by_composite_key(monkeypatch: Any, tmp_path: Path) -
 
     # Try to write the same trade — should be deduped
     trade = _trade()
-    written = writer.write_trades(workbook_path, [trade])
+    written = writer.write_trades(workbook_path, SHEET_NAME, [trade])
 
     assert written == 0
     assert len(table.added_rows) == 0
@@ -246,7 +251,7 @@ def test_write_trades_skips_none_values(monkeypatch: Any, tmp_path: Path) -> Non
         account="Fidelity",
         stock="SOLS",
     )
-    written = writer.write_trades(workbook_path, [trade])
+    written = writer.write_trades(workbook_path, SHEET_NAME, [trade])
 
     assert written == 1
     row = table.added_rows[0]
@@ -256,3 +261,41 @@ def test_write_trades_skips_none_values(monkeypatch: Any, tmp_path: Path) -> Non
     assert row[13] == 1.0  # C (quantity)
     assert row[18] == 86.3  # Exit Price
     assert row[19] == date(2026, 5, 27)  # Close Date
+
+
+def test_write_trades_rejects_unknown_sheet(monkeypatch: Any, tmp_path: Path) -> None:
+    workbook_path = tmp_path / "ledger.xlsx"
+    workbook_path.write_text("placeholder", encoding="utf-8")
+
+    table = FakeTable(["Stock", "Open Date", "B/S", "C"], [])
+    app = FakeApp([])
+    book = FakeBook(str(workbook_path.resolve()), table, app)
+    app.books.append(book)
+
+    monkeypatch.setattr(writer, "xw", FakeXw(app))
+
+    with pytest.raises(ValueError, match="Could not find worksheet 'Missing'"):
+        writer.write_trades(workbook_path, "Missing", [_trade()])
+
+    assert len(table.added_rows) == 0
+
+
+def test_write_trades_uses_only_the_named_sheet(monkeypatch: Any, tmp_path: Path) -> None:
+    workbook_path = tmp_path / "ledger.xlsx"
+    workbook_path.write_text("placeholder", encoding="utf-8")
+
+    headers = ["Stock", "Open Date", "B/S", "C"]
+    other_table = FakeTable(headers, [])
+    target_table = FakeTable(headers, [])
+    app = FakeApp([])
+    book = FakeBook(str(workbook_path.resolve()), other_table, app, sheet_name="Other")
+    book.sheets.append(FakeSheet(target_table, SHEET_NAME))
+    app.books.append(book)
+
+    monkeypatch.setattr(writer, "xw", FakeXw(app))
+
+    written = writer.write_trades(workbook_path, SHEET_NAME, [_trade()])
+
+    assert written == 1
+    assert len(target_table.added_rows) == 1
+    assert len(other_table.added_rows) == 0
