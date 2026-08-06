@@ -5,6 +5,16 @@ import pytest
 from trade_ingestion.adapters.fidelity import parse_fidelity_csv
 
 
+def test_parse_fidelity_csv_accepts_abbreviated_month_date() -> None:
+    content = """Trade Date,Action,Symbol,Quantity,Price,Commission,Account,Transaction ID,Security Type
+Aug-3-2026,Buy,AAPL,100,180.50,1.00,IRA-1,EQ-BUY,Equity
+"""
+
+    events = parse_fidelity_csv(content)
+
+    assert events[0].trade_date == date(2026, 8, 3)
+
+
 def test_parse_fidelity_csv_skips_metadata_and_non_trade_rows() -> None:
     content = """Metadata,Value
 Generated,2024-01-01

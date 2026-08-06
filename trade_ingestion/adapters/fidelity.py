@@ -7,7 +7,7 @@ from datetime import date, datetime
 
 from constants import FIDELITY_BROKER_NAME
 from trade_ingestion.models import RawEvent, make_fallback_lot_id
-DATE_FORMATS = ("%Y-%m-%d", "%m/%d/%Y", "%m/%d/%y")
+DATE_FORMATS = ("%Y-%m-%d", "%m/%d/%Y", "%m/%d/%y", "%b-%d-%Y")
 OPTION_SYMBOL_RE = re.compile(
     r"^(?P<underlying>[A-Z.]+)\s+(?P<exp>\d{2}/\d{2}/\d{4})\s+(?P<strike>\d+(?:\.\d+)?)\s+(?P<cp>[CP])$"
 )
