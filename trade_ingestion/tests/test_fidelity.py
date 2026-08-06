@@ -179,3 +179,18 @@ Trade Date,Action,Symbol,Quantity,Price,Commission,Fees,Account,Transaction ID,S
     assert option_buy.strike == 450.0
     assert option_buy.side == "B"
     assert option_buy.effect == "OPEN"
+
+
+def test_parse_fidelity_csv_accepts_activity_description_action_alias() -> None:
+    content = """Trade Date,Activity Description,Symbol,Quantity,Price,Commission,Account,Transaction ID,Security Type
+2024-01-02,Buy,AAPL,100,180.50,1.00,IRA-1,EQ-BUY,Equity
+2024-01-03,Sell,AAPL,100,181.75,1.00,IRA-1,EQ-SELL,Equity
+"""
+
+    events = parse_fidelity_csv(content)
+
+    assert len(events) == 2
+    assert events[0].effect == "OPEN"
+    assert events[0].side == "C"
+    assert events[1].effect == "CLOSE"
+    assert events[1].side == "C"

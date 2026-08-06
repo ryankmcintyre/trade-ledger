@@ -7,7 +7,6 @@ from datetime import date, datetime
 
 from constants import FIDELITY_BROKER_NAME
 from trade_ingestion.models import RawEvent, make_fallback_lot_id
-HEADER_REQUIREMENTS = {"Action", "Symbol"}
 DATE_FORMATS = ("%Y-%m-%d", "%m/%d/%Y", "%m/%d/%y")
 OPTION_SYMBOL_RE = re.compile(
     r"^(?P<underlying>[A-Z.]+)\s+(?P<exp>\d{2}/\d{2}/\d{4})\s+(?P<strike>\d+(?:\.\d+)?)\s+(?P<cp>[CP])$"
@@ -22,7 +21,7 @@ FIDELITY_COMPACT_RE = re.compile(
 )
 FIELD_ALIASES: dict[str, tuple[str, ...]] = {
     "trade_date": ("Run Date", "Trade Date", "Date", "Settlement Date"),
-    "action": ("Action", "Transaction Type", "Type"),
+    "action": ("Action", "Activity Description", "Transaction Type", "Type"),
     "symbol": ("Symbol", "Description"),
     "quantity": ("Quantity", "Qty"),
     "price": ("Price ($)", "Price", "Net Amount Per Share", "Amount"),
@@ -33,6 +32,12 @@ FIELD_ALIASES: dict[str, tuple[str, ...]] = {
     "security_type": ("Security Type", "Type Detail"),
     "underlying_price": ("Underlying Price", "Underlying Last Price"),
 }
+HEADER_DETECTION_ALIASES: dict[str, tuple[str, ...]] = {
+    "action": ("Action", "Activity Description", "Transaction Type", "Type"),
+    "symbol": ("Symbol", "Description"),
+}
+HEADER_ACTION_ALIASES = set(HEADER_DETECTION_ALIASES["action"])
+HEADER_SYMBOL_ALIASES = set(HEADER_DETECTION_ALIASES["symbol"])
 
 
 class FidelityParseError(ValueError):
@@ -67,7 +72,9 @@ def parse_fidelity_csv(content: str) -> list[RawEvent]:
 def _find_header_index(rows: list[list[str]]) -> int | None:
     for index, row in enumerate(rows):
         normalized = {cell.strip() for cell in row if cell.strip()}
-        if HEADER_REQUIREMENTS.issubset(normalized):
+        if normalized.intersection(HEADER_ACTION_ALIASES) and normalized.intersection(
+            HEADER_SYMBOL_ALIASES
+        ):
             return index
     return None
 
