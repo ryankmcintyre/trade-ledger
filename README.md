@@ -107,7 +107,7 @@ To export from Fidelity: **Accounts & Trade → Activity & Orders → History** 
 
 - **File extension:** `.csv` (expected; the CLI does not currently validate the extension)
 - **Encoding:** UTF-8 or UTF-8 with BOM
-- **Header row:** can appear after metadata rows; the importer scans for the first row containing at least `Action` and `Symbol`
+- **Header row:** can appear after metadata rows; the importer scans for the first row containing `Action` and `Symbol` (aliases are resolved after the header is found)
 - **Column ordering:** flexible (columns may appear in any order)
 - **Alias resolution precedence:** when multiple aliases are present, the importer uses the first
   matching alias in the order listed below
