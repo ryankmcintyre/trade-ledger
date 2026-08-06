@@ -107,13 +107,13 @@ To export from Fidelity: **Accounts & Trade → Activity & Orders → History** 
 
 - **File extension:** `.csv` (expected; the CLI does not currently validate the extension)
 - **Encoding:** UTF-8 or UTF-8 with BOM
-- **Header row:** can appear after metadata rows; the importer scans for the first row containing `Action` and `Symbol` (aliases are resolved after the header is found)
+- **Header row:** can appear after metadata rows; the importer scans for the first row containing Action and Symbol columns via supported aliases
 - **Column ordering:** flexible (columns may appear in any order)
 - **Alias resolution precedence:** when multiple aliases are present, the importer uses the first
   matching alias in the order listed below
 - **Required fields (via supported aliases):**
   - Trade date: `Run Date` / `Trade Date` / `Date` / `Settlement Date` (`Settlement Date` is fallback and may differ from execution date)
-  - Action: `Action` / `Transaction Type` / `Type` (`Type`, not `Type Detail`)
+  - Action: `Action` / `Activity Description` / `Transaction Type` / `Type` (`Type`, not `Type Detail`)
   - Symbol: `Symbol` / `Description`
   - Quantity: `Quantity` / `Qty`
 - **Optional fields used when present (via supported aliases):**
