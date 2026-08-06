@@ -44,10 +44,8 @@ def run_pipeline(*, broker: str, csv_path: Path, workbook_path: Path, sheet_name
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Ingest broker trade CSVs into the trade ledger workbook.")
-    parser.add_argument("broker_pos", nargs="?", help="Broker adapter name, for example: fidelity")
-    parser.add_argument("csv_pos", nargs="?", type=Path, help="Path to the broker export CSV file")
-    parser.add_argument("--broker", dest="broker_flag", help="Broker adapter name, for example: fidelity")
-    parser.add_argument("--csv", dest="csv_flag", type=Path, help="Path to the broker export CSV file")
+    parser.add_argument("broker", help="Broker adapter name, for example: fidelity")
+    parser.add_argument("csv_path", type=Path, help="Path to the broker export CSV file")
     parser.add_argument(
         "--workbook",
         type=Path,
@@ -64,14 +62,9 @@ def build_parser() -> argparse.ArgumentParser:
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    broker = args.broker_flag or args.broker_pos
-    csv_path = args.csv_flag or args.csv_pos
-    if broker is None or csv_path is None:
-        raise SystemExit("broker and csv_path are required; supply them as positional arguments or via --broker / --csv")
-
     result = run_pipeline(
-        broker=broker,
-        csv_path=csv_path,
+        broker=args.broker,
+        csv_path=args.csv_path,
         workbook_path=args.workbook,
         sheet_name=args.sheet,
     )

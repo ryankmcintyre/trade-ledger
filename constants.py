@@ -1,5 +1,4 @@
 FIDELITY_BROKER_NAME = "Fidelity"
-ROBINHOOD_BROKER_NAME = "Robinhood"
 
 TABLE_NAME = "tbl_trades"
 
