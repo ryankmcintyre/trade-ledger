@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Callable, Sequence
 
-from trade_ingestion.adapters import parse_fidelity_csv, parse_robinhood_csv
+from trade_ingestion.adapters import parse_fidelity_csv
 from trade_ingestion.matcher import match_trades_with_summary
 from trade_ingestion.models import RawEvent
 from trade_ingestion.writer import write_trades
@@ -13,7 +13,6 @@ from trade_ingestion.writer import write_trades
 Adapter = Callable[[str], list[RawEvent]]
 ADAPTERS: dict[str, Adapter] = {
     "fidelity": parse_fidelity_csv,
-    "robinhood": parse_robinhood_csv,
 }
 
 

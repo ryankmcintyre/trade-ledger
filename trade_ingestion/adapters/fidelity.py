@@ -14,10 +14,10 @@ OPTION_SYMBOL_RE = re.compile(
 OCC_SYMBOL_RE = re.compile(
     r"^(?P<underlying>[A-Z.]+)\s(?P<exp>\d{6})(?P<cp>[CP])(?P<strike>\d{8})$"
 )
-# NOTE: Real Fidelity CSV exports use a compact symbol format with a leading dash and no
-# zero-padded strike: e.g. -SPXW260618P7400, -NOK261016C16. This is distinct from full OCC format.
+# NOTE: Real Fidelity CSV exports use a compact symbol format with an optional leading dash and no
+# zero-padded strike: e.g. -SPXW260618P7400, -NOK261016C16, or NVDL260807P26. This is distinct from full OCC format.
 FIDELITY_COMPACT_RE = re.compile(
-    r"^-(?P<underlying>[A-Z.]+)(?P<exp>\d{6})(?P<cp>[CP])(?P<strike>\d+(?:\.\d+)?)$"
+    r"^(?:-)?(?P<underlying>[A-Z.]+)(?P<exp>\d{6})(?P<cp>[CP])(?P<strike>\d+(?:\.\d+)?)$"
 )
 FIELD_ALIASES: dict[str, tuple[str, ...]] = {
     "trade_date": ("Run Date", "Trade Date", "Date", "Settlement Date"),
