@@ -105,7 +105,7 @@ To export from Fidelity: **Accounts & Trade → Activity & Orders → History** 
 
 #### Input file requirements
 
-- **File extension:** `.csv`
+- **File extension:** `.csv` (expected; the CLI does not currently validate the extension)
 - **Encoding:** UTF-8 or UTF-8 with BOM
 - **Header row:** can appear after metadata rows; the importer scans for the first row containing at least `Action` and `Symbol`
 - **Column ordering:** flexible (columns may appear in any order)
