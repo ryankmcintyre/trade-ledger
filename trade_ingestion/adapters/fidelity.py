@@ -32,12 +32,9 @@ FIELD_ALIASES: dict[str, tuple[str, ...]] = {
     "security_type": ("Security Type", "Type Detail"),
     "underlying_price": ("Underlying Price", "Underlying Last Price"),
 }
-HEADER_DETECTION_ALIASES: dict[str, tuple[str, ...]] = {
-    "action": ("Action", "Activity Description", "Transaction Type", "Type"),
-    "symbol": ("Symbol", "Description"),
-}
-HEADER_ACTION_ALIASES = set(HEADER_DETECTION_ALIASES["action"])
-HEADER_SYMBOL_ALIASES = set(HEADER_DETECTION_ALIASES["symbol"])
+# Reuse FIELD_ALIASES to keep header detection aligned with parsing aliases.
+HEADER_ACTION_ALIASES = set(FIELD_ALIASES["action"])
+HEADER_SYMBOL_ALIASES = set(FIELD_ALIASES["symbol"])
 
 
 class FidelityParseError(ValueError):
