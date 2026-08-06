@@ -103,6 +103,28 @@ Parses Fidelity transaction history CSV exports. The adapter handles:
 
 To export from Fidelity: **Accounts & Trade → Activity & Orders → History** → select a date range → **Download**.
 
+#### Input file requirements
+
+- **File extension:** `.csv` (expected; the CLI does not currently validate the extension)
+- **Encoding:** UTF-8 or UTF-8 with BOM
+- **Header row:** can appear after metadata rows; the importer scans for the first row containing `Action` and `Symbol` (aliases are resolved after the header is found)
+- **Column ordering:** flexible (columns may appear in any order)
+- **Alias resolution precedence:** when multiple aliases are present, the importer uses the first
+  matching alias in the order listed below
+- **Required fields (via supported aliases):**
+  - Trade date: `Run Date` / `Trade Date` / `Date` / `Settlement Date` (`Settlement Date` is fallback and may differ from execution date)
+  - Action: `Action` / `Transaction Type` / `Type` (`Type`, not `Type Detail`)
+  - Symbol: `Symbol` / `Description`
+  - Quantity: `Quantity` / `Qty`
+- **Optional fields used when present (via supported aliases):**
+  - Price: `Price ($)` / `Price` / `Net Amount Per Share` / `Amount` (`Amount` is last-resort)
+  - Commission/fees: `Commission ($)` / `Commission`
+  - Account: `Account` / `Account Number`
+  - Transaction ID: `Transaction ID` / `Reference Number` / `Trade ID`
+  - Security type: `Security Type` / `Type Detail`
+  - Underlying price: `Underlying Price` / `Underlying Last Price`
+- **Alias overlap note:** `Type` is an Action alias; `Type Detail` is a separate Security type alias.
+
 ---
 
 ## How it works
