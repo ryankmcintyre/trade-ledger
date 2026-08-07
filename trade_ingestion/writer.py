@@ -231,8 +231,8 @@ def _convert_stock_cell(
 
     if symbol_cell_column is None:
         # Without the verification column we cannot confirm the entity resolved.
+        _restore_plain_ticker(stock_cell, ticker)
         return False
-
     resolved = _call_with_com_retry(lambda: sheet.range((row_number, symbol_cell_column)).value)
     if _is_resolved_symbol(resolved):
         return True
