@@ -8,7 +8,7 @@ import pytest
 import main
 from trade_ingestion.matcher import MatchResult
 from trade_ingestion.models import CanonicalTrade, RawEvent
-from trade_ingestion.writer import WriteResult
+from trade_ingestion.writer import ConversionFailure, WriteResult
 
 
 def test_run_pipeline_uses_broker_adapter_and_writer(monkeypatch: Any, tmp_path: Path) -> None:
@@ -134,3 +134,54 @@ def test_main_requires_sheet_argument(tmp_path: Path) -> None:
 
     with pytest.raises(SystemExit):
         main.main(["fidelity", str(csv_path), "--workbook", str(workbook_path)])
+
+
+def test_main_reports_conversion_failure_details(monkeypatch: Any, capsys: pytest.CaptureFixture[str], tmp_path: Path) -> None:
+    csv_path = tmp_path / "input.csv"
+    workbook_path = tmp_path / "ledger.xlsx"
+
+    def fake_run_pipeline(
+        *, broker: str, csv_path: Path, workbook_path: Path, sheet_name: str, ticker_prompt: Any = None
+    ) -> main.PipelineResult:
+        return main.PipelineResult(
+            rows_ingested=1,
+            rows_skipped=0,
+            open_positions=0,
+            failed_conversions=["SPXW"],
+            conversion_failures=[
+                ConversionFailure(
+                    trade=CanonicalTrade(
+                        lot_id="lot-1",
+                        trade_id="",
+                        underlying="SPXW",
+                        symbol="SPXW",
+                        open_date=__import__("datetime").date(2024, 1, 2),
+                        exp_date=None,
+                        call_or_put=None,
+                        side="C",
+                        strike=None,
+                        stock_price_open=10.0,
+                        premium=1.0,
+                        quantity=1.0,
+                        fees=None,
+                        exit_price=None,
+                        close_date=None,
+                        account="Fidelity",
+                        stock="SPXW",
+                    ),
+                    input_ticker="SPXW",
+                    attempted_ticker="SPY",
+                    error="The stock symbol could not be resolved",
+                )
+            ],
+        )
+
+    monkeypatch.setattr(main, "run_pipeline", fake_run_pipeline)
+
+    exit_code = main.main(["fidelity", str(csv_path), "--workbook", str(workbook_path), "--sheet", "Trades"])
+
+    assert exit_code == 0
+    output = capsys.readouterr().out
+    assert "Warning:" in output
+    assert "Conversion failed for record" in output
+    assert "SPXW" in output

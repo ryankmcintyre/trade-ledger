@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import time
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date
 from pathlib import Path
 from typing import Any, Callable, TypeVar
@@ -103,6 +103,16 @@ def _call_with_com_retry(
 
 
 @dataclass(slots=True)
+class ConversionFailure:
+    """Details about a failed stock-conversion retry for a single trade."""
+
+    trade: CanonicalTrade
+    input_ticker: str
+    attempted_ticker: str | None
+    error: str
+
+
+@dataclass(slots=True)
 class WriteResult:
     """Outcome of a write_trades run."""
 
@@ -114,15 +124,24 @@ class WriteResult:
     # because the latter is a Column A *display* value that may have been remapped
     # via UNDERLYING_DISPLAY_MAP (e.g. "SPXW" -> "S&P 500 INDEX").
     failed_conversions: list[str]
+    conversion_failures: list[ConversionFailure] = field(default_factory=list)
 
 
-def write_trades(workbook_path: Path, sheet_name: str, trades: list[CanonicalTrade]) -> int:
+def write_trades(
+    workbook_path: Path,
+    sheet_name: str,
+    trades: list[CanonicalTrade],
+    ticker_prompt: Callable[[str, CanonicalTrade], str | None] | None = None,
+) -> int:
     """Append trades to tbl_trades and return the number of rows written."""
-    return write_trades_detailed(workbook_path, sheet_name, trades).rows_written
+    return write_trades_detailed(workbook_path, sheet_name, trades, ticker_prompt=ticker_prompt).rows_written
 
 
 def write_trades_detailed(
-    workbook_path: Path, sheet_name: str, trades: list[CanonicalTrade]
+    workbook_path: Path,
+    sheet_name: str,
+    trades: list[CanonicalTrade],
+    ticker_prompt: Callable[[str, CanonicalTrade], str | None] | None = None,
 ) -> WriteResult:
     workbook, app, was_open = _open_workbook(workbook_path)
     try:
@@ -147,6 +166,7 @@ def write_trades_detailed(
         stock_column = header_positions.get(FIELD_TO_COLUMN["stock"])
         symbol_column = headers.index(STOCK_SYMBOL_COLUMN) + 1 if STOCK_SYMBOL_COLUMN in headers else None
         failed_conversions: list[str] = []
+        conversion_failures: list[ConversionFailure] = []
 
         for trade in pending:
             row = _call_with_com_retry(
@@ -175,22 +195,29 @@ def write_trades_detailed(
                 _call_with_com_retry(_write_cell)
 
             if stock_column is not None and trade.stock:
-                converted = _convert_stock_cell(
+                converted, conversion_failure = _convert_stock_cell_with_recovery(
                     sheet,
                     row_number=base_row,
                     stock_cell_column=base_column + stock_column - 1,
                     symbol_cell_column=(
                         base_column + symbol_column - 1 if symbol_column is not None else None
                     ),
-                    ticker=trade.stock,
+                    trade=trade,
+                    ticker_prompt=ticker_prompt,
                 )
                 if not converted:
                     failed_conversions.append(trade.underlying or trade.stock)
+                    if conversion_failure is not None:
+                        conversion_failures.append(conversion_failure)
 
             insertion_position += 1
 
         _call_with_com_retry(workbook.save)
-        return WriteResult(rows_written=len(pending), failed_conversions=failed_conversions)
+        return WriteResult(
+            rows_written=len(pending),
+            failed_conversions=failed_conversions,
+            conversion_failures=conversion_failures,
+        )
     finally:
         if not was_open:
             workbook.close()
@@ -203,6 +230,77 @@ def write_trades_detailed(
 # NOTE: rich value. Writing a plain ticker string leaves those columns unresolved.
 # NOTE: Converting requires Microsoft 365 with the Stocks data type available and an
 # NOTE: internet connection; otherwise the conversion is a no-op and we fall back to text.
+def _convert_stock_cell_with_recovery(
+    sheet: Any,
+    *,
+    row_number: int,
+    stock_cell_column: int,
+    symbol_cell_column: int | None,
+    trade: CanonicalTrade,
+    ticker_prompt: Callable[[str, CanonicalTrade], str | None] | None = None,
+) -> tuple[bool, ConversionFailure | None]:
+    input_ticker = trade.stock or trade.underlying or ""
+    if not input_ticker:
+        return False, None
+
+    converted, error_message = _convert_stock_cell(
+        sheet,
+        row_number=row_number,
+        stock_cell_column=stock_cell_column,
+        symbol_cell_column=symbol_cell_column,
+        ticker=input_ticker,
+    )
+    if converted:
+        return True, None
+
+    if ticker_prompt is None:
+        return False, _make_conversion_failure(trade, input_ticker, input_ticker, error_message)
+
+    try:
+        replacement_ticker = ticker_prompt(input_ticker, trade)
+    except Exception as exc:  # noqa: BLE001 - prompt failures are best-effort and should not abort ingestion
+        return False, _make_conversion_failure(trade, input_ticker, input_ticker, f"Prompt failed: {exc}")
+
+    if replacement_ticker is None:
+        return False, _make_conversion_failure(trade, input_ticker, input_ticker, error_message)
+
+    replacement_text = replacement_ticker.strip()
+    if not replacement_text:
+        return False, _make_conversion_failure(trade, input_ticker, input_ticker, error_message)
+
+    _set_plain_ticker(sheet, row_number, stock_cell_column, replacement_text)
+    converted, retry_error = _convert_stock_cell(
+        sheet,
+        row_number=row_number,
+        stock_cell_column=stock_cell_column,
+        symbol_cell_column=symbol_cell_column,
+        ticker=replacement_text,
+    )
+    if converted:
+        return True, None
+
+    return False, _make_conversion_failure(
+        trade,
+        input_ticker,
+        replacement_text,
+        retry_error or error_message or "Ticker did not resolve",
+    )
+
+
+def _make_conversion_failure(
+    trade: CanonicalTrade,
+    input_ticker: str,
+    attempted_ticker: str | None,
+    error: str | None,
+) -> ConversionFailure:
+    return ConversionFailure(
+        trade=trade,
+        input_ticker=input_ticker,
+        attempted_ticker=attempted_ticker,
+        error=error or "Ticker did not resolve",
+    )
+
+
 def _convert_stock_cell(
     sheet: Any,
     *,
@@ -210,7 +308,7 @@ def _convert_stock_cell(
     stock_cell_column: int,
     symbol_cell_column: int | None,
     ticker: str,
-) -> bool:
+) -> tuple[bool, str | None]:
     """Convert one Column A cell to the Stocks data type. Return True on success.
 
     TODO: Excel offers no programmatic way to disambiguate an ambiguous ticker match,
@@ -228,23 +326,32 @@ def _convert_stock_cell(
                 LanguageCulture=LINKED_DATA_TYPE_CULTURE,
             )
         )
-    except Exception:  # noqa: BLE001 - conversion is best-effort; ingest must not fail
+    except Exception as exc:  # noqa: BLE001 - conversion is best-effort; ingest must not fail
         _restore_plain_ticker(stock_cell, ticker)
-        return False
+        return False, str(exc)
 
     if symbol_cell_column is None:
         # Without the verification column we cannot confirm the entity resolved, so
         # undo the conversion by rewriting plain text. This keeps the workbook state
         # consistent with the failure we report, and keeps Column A readable for dedup.
         _restore_plain_ticker(stock_cell, ticker)
-        return False
+        return False, "Workbook does not include a verification column for the stock symbol"
 
     resolved = _call_with_com_retry(lambda: sheet.range((row_number, symbol_cell_column)).value)
     if _is_resolved_symbol(resolved):
-        return True
+        return True, None
 
     _restore_plain_ticker(stock_cell, ticker)
-    return False
+    return False, "The stock symbol could not be resolved"
+
+
+def _set_plain_ticker(sheet: Any, row_number: int, stock_cell_column: int, ticker: str) -> None:
+    """Set the plain ticker text for a stock cell without attempting conversion."""
+    stock_cell = sheet.range((row_number, stock_cell_column))
+    try:
+        _call_with_com_retry(lambda: setattr(stock_cell, "value", ticker))
+    except Exception:  # noqa: BLE001 - best effort for prompt-retry flow
+        pass
 
 
 def _restore_plain_ticker(stock_cell: Any, ticker: str) -> None:
