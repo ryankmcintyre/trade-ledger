@@ -187,7 +187,7 @@ def test_parse_fidelity_csv_treats_dashed_commission_as_zero() -> None:
     events = parse_fidelity_csv(content)
 
     assert len(events) == 1
-    assert events[0].fees is None
+    assert events[0].fees == 0.0
 
 
 def test_parse_fidelity_csv_with_short_form_actions() -> None:

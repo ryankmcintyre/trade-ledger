@@ -245,12 +245,20 @@ def _normalize_option_symbol(symbol: str) -> dict[str, object]:
 
 def _sum_fees(row: dict[str, str | None]) -> float | None:
     """Only include Commission ($) in fees — Fees ($) column is excluded per requirements."""
-    total = sum(
-        _parse_fee_value(row.get(field))
-        for field in FIELD_ALIASES["commission"]
-        if field in row
-    )
-    return total if total > 0.0 else None
+    total = 0.0
+    has_commission_value = False
+    for field in FIELD_ALIASES["commission"]:
+        if field not in row:
+            continue
+        value = row.get(field)
+        if value in (None, ""):
+            continue
+        has_commission_value = True
+        total += _parse_fee_value(value)
+
+    if not has_commission_value:
+        return None
+    return total if total > 0.0 else 0.0
 
 
 def _parse_date(value: str) -> date:
@@ -269,10 +277,15 @@ def _parse_float(value: str) -> float:
 def _parse_fee_value(value: str | None) -> float:
     if value in (None, ""):
         return 0.0
+
+    stripped = (value or "").strip()
+    if stripped in {"--", "-"}:
+        return 0.0
+
     try:
         return _parse_float(value)
-    except ValueError:
-        return 0.0
+    except ValueError as exc:
+        raise ValueError(f"Invalid Fidelity commission value: {value}") from exc
 
 
 def _parse_optional_float(value: str | None) -> float | None:
