@@ -217,11 +217,12 @@ def _trade(
     open_date: date | None = date(2024, 1, 2),
     quantity: float = 1.0,
     side: str = "B",
+    underlying: str | None = None,
 ) -> CanonicalTrade:
     return CanonicalTrade(
         lot_id="lot-1",
         trade_id="",
-        underlying="SPY",
+        underlying=underlying if underlying is not None else stock,
         symbol="SPY 240119C00450000",
         open_date=open_date,
         exp_date=date(2024, 1, 19),
@@ -720,3 +721,36 @@ def test_write_trades_second_run_writes_no_rows(monkeypatch: Any, tmp_path: Path
 
     assert writer.write_trades(workbook_path2, SHEET_NAME, trades) == 0
     assert len(table2.added_rows) == 0
+
+
+def test_write_trades_reports_underlying_ticker_for_remapped_display_value(
+    monkeypatch: Any, tmp_path: Path
+) -> None:
+    workbook_path, _table, book, app = _build_workbook(tmp_path, FULL_HEADERS, [])
+    monkeypatch.setattr(writer, "xw", FakeXw(app))
+    book.sheets[0].stock_resolver = lambda ticker: "#FIELD!"
+
+    # Column A holds a remapped display value (UNDERLYING_DISPLAY_MAP), but the
+    # warning should name the ticker the user actually imported.
+    trade = _trade(stock="S&P 500 INDEX", underlying="SPXW")
+    result = writer.write_trades_detailed(workbook_path, SHEET_NAME, [trade])
+
+    assert result.failed_conversions == ["SPXW"]
+
+
+def test_write_trades_restores_plain_text_without_verification_column(
+    monkeypatch: Any, tmp_path: Path
+) -> None:
+    # A workbook without the "Stock Symbol" column offers no way to verify the
+    # entity resolved, so the cell must be left as plain text rather than a
+    # half-converted entity that later reads back as a display name.
+    headers = ["Stock", "Open Date", "B/S", "C"]
+    workbook_path, table, book, app = _build_workbook(tmp_path, headers, [])
+    monkeypatch.setattr(writer, "xw", FakeXw(app))
+
+    result = writer.write_trades_detailed(workbook_path, SHEET_NAME, [_trade(stock="SPY")])
+
+    assert result.rows_written == 1
+    assert result.failed_conversions == ["SPY"]
+    assert len(book.sheets[0].conversion_calls) == 1
+    assert table.added_rows[0][1] == "SPY"

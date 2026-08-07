@@ -107,9 +107,12 @@ class WriteResult:
     """Outcome of a write_trades run."""
 
     rows_written: int
-    # Tickers whose Column A cell could not be converted to the Stocks linked
-    # data type; those rows keep the plain ticker text and their formula-driven
-    # "Stock Symbol"/"Current Stock Price" columns will not resolve.
+    # Underlying tickers whose Column A cell could not be converted to the Stocks
+    # linked data type; those rows keep the plain Column A text and their
+    # formula-driven "Stock Symbol"/"Current Stock Price" columns will not resolve.
+    # NOTE: the underlying ticker is reported rather than CanonicalTrade.stock,
+    # because the latter is a Column A *display* value that may have been remapped
+    # via UNDERLYING_DISPLAY_MAP (e.g. "SPXW" -> "S&P 500 INDEX").
     failed_conversions: list[str]
 
 
@@ -182,7 +185,7 @@ def write_trades_detailed(
                     ticker=trade.stock,
                 )
                 if not converted:
-                    failed_conversions.append(trade.stock)
+                    failed_conversions.append(trade.underlying or trade.stock)
 
             insertion_position += 1
 
@@ -230,9 +233,12 @@ def _convert_stock_cell(
         return False
 
     if symbol_cell_column is None:
-        # Without the verification column we cannot confirm the entity resolved.
+        # Without the verification column we cannot confirm the entity resolved, so
+        # undo the conversion by rewriting plain text. This keeps the workbook state
+        # consistent with the failure we report, and keeps Column A readable for dedup.
         _restore_plain_ticker(stock_cell, ticker)
         return False
+
     resolved = _call_with_com_retry(lambda: sheet.range((row_number, symbol_cell_column)).value)
     if _is_resolved_symbol(resolved):
         return True

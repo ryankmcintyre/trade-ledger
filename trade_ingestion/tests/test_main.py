@@ -67,7 +67,7 @@ def test_run_pipeline_uses_broker_adapter_and_writer(monkeypatch: Any, tmp_path:
         captured["events"] = input_events
         return MatchResult(trades=trades, skipped_duplicates=0, open_positions=1)
 
-    def fake_write_trades(path: Path, sheet_name: str, input_trades: list[CanonicalTrade]) -> Any:
+    def fake_write_trades(path: Path, sheet_name: str, input_trades: list[CanonicalTrade]) -> WriteResult:
         captured["write_path"] = path
         captured["sheet_name"] = sheet_name
         captured["trades"] = input_trades
