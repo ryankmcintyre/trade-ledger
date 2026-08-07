@@ -66,7 +66,8 @@ class FakeRowRange:
 
 class FakeListRow:
     def __init__(self, table: "FakeTable") -> None:
-        row_number = len(table.added_rows) + 2
+        existing_count = len(table.DataBodyRange.Value or [])
+        row_number = existing_count + len(table.added_rows) + 2
         self.Range = FakeRowRange(table, row_number)
         table.added_rows.append(self.Range.values)
         table.rows_by_number[row_number] = self.Range
