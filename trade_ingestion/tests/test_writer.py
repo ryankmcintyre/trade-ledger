@@ -39,9 +39,25 @@ class FakeCell:
         self._row.values[self._column_index] = value
 
 
+class FakeXlwingsCell:
+    def __init__(self, row: "FakeRowRange", column_index: int) -> None:
+        self._row = row
+        self._column_index = column_index
+
+    @property
+    def value(self) -> Any:
+        return self._row.values.get(self._column_index)
+
+    @value.setter
+    def value(self, value: Any) -> None:
+        self._row.values[self._column_index] = value
+
+
 class FakeRowRange:
-    def __init__(self, table: "FakeTable") -> None:
+    def __init__(self, table: "FakeTable", row_number: int) -> None:
         self.table = table
+        self.Row = row_number
+        self.Column = 1
         self.values: dict[int, Any] = {}
 
     def Cells(self, _row_index: int, column_index: int) -> FakeCell:
@@ -50,8 +66,10 @@ class FakeRowRange:
 
 class FakeListRow:
     def __init__(self, table: "FakeTable") -> None:
-        self.Range = FakeRowRange(table)
+        row_number = len(table.added_rows) + 2
+        self.Range = FakeRowRange(table, row_number)
         table.added_rows.append(self.Range.values)
+        table.rows_by_number[row_number] = self.Range
 
 
 class FakeListRows:
@@ -73,6 +91,7 @@ class FakeTable:
         self.DataBodyRange = FakeRange(rows if rows else None)
         self.ListRows = FakeListRows(self)
         self.added_rows: list[dict[int, Any]] = []
+        self.rows_by_number: dict[int, FakeRowRange] = {}
 
 
 class FakeSheetApi:
@@ -89,6 +108,13 @@ class FakeSheet:
     def __init__(self, table: FakeTable, name: str = SHEET_NAME) -> None:
         self.api = FakeSheetApi(table)
         self.name = name
+        self._table = table
+
+    def range(self, coords: tuple[int, int]) -> FakeXlwingsCell:
+        row_number, column_number = coords
+        row = self._table.rows_by_number[row_number]
+        relative_column = column_number - row.Column + 1
+        return FakeXlwingsCell(row, relative_column)
 
 
 class FakeBooks(list):

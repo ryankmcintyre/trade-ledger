@@ -97,7 +97,8 @@ def _call_with_com_retry(
 def write_trades(workbook_path: Path, sheet_name: str, trades: list[CanonicalTrade]) -> int:
     workbook, app, was_open = _open_workbook(workbook_path)
     try:
-        table = _find_table(workbook, sheet_name, TABLE_NAME)
+        sheet = _find_sheet(workbook, sheet_name)
+        table = _find_table(sheet, TABLE_NAME)
         headers = _table_headers(table)
         existing_keys = _existing_dedup_keys(table, headers)
 
@@ -115,6 +116,8 @@ def write_trades(workbook_path: Path, sheet_name: str, trades: list[CanonicalTra
 
         for trade in pending:
             row = _call_with_com_retry(lambda: table.ListRows.Add())
+            base_row = _call_with_com_retry(lambda: row.Range.Row)
+            base_column = _call_with_com_retry(lambda: row.Range.Column)
             for field_name, col_name in FIELD_TO_COLUMN.items():
                 if col_name not in header_positions:
                     continue
@@ -123,8 +126,13 @@ def write_trades(workbook_path: Path, sheet_name: str, trades: list[CanonicalTra
                     continue
                 cell_index = header_positions[col_name]
 
-                def _write_cell(row: Any = row, cell_index: int = cell_index, value: Any = value) -> None:
-                    row.Range.Cells(1, cell_index).Value = value
+                def _write_cell(
+                    base_row: int = base_row,
+                    base_column: int = base_column,
+                    cell_index: int = cell_index,
+                    value: Any = value,
+                ) -> None:
+                    sheet.range((base_row, base_column + cell_index - 1)).value = value
 
                 _call_with_com_retry(_write_cell)
 
@@ -140,7 +148,8 @@ def read_existing_lot_ids(workbook_path: Path, sheet_name: str) -> set[str]:
     """DEPRECATED: read existing composite dedup keys as pipe-delimited strings."""
     workbook, app, was_open = _open_workbook(workbook_path)
     try:
-        table = _find_table(workbook, sheet_name, TABLE_NAME)
+        sheet = _find_sheet(workbook, sheet_name)
+        table = _find_table(sheet, TABLE_NAME)
         headers = _table_headers(table)
         return _existing_dedup_keys(table, headers)
     finally:
@@ -244,8 +253,7 @@ def _find_open_book(resolved_path: str) -> Any | None:
     return None
 
 
-def _find_table(workbook: Any, sheet_name: str, table_name: str) -> Any:
-    sheet = _find_sheet(workbook, sheet_name)
+def _find_table(sheet: Any, table_name: str) -> Any:
     try:
         return _call_with_com_retry(lambda: sheet.api.ListObjects(table_name))
     except ComRetryExhaustedError:
@@ -254,7 +262,7 @@ def _find_table(workbook: Any, sheet_name: str, table_name: str) -> Any:
         raise
     except Exception as exc:
         raise ValueError(
-            f"Could not find table {table_name!r} on worksheet {sheet_name!r}"
+            f"Could not find table {table_name!r} on worksheet {sheet.name!r}"
         ) from exc
 
 
