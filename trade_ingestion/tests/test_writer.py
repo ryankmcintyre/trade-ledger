@@ -319,3 +319,101 @@ def test_write_trades_rejects_missing_table_on_sheet(monkeypatch: Any, tmp_path:
 
     with pytest.raises(ValueError, match=f"Could not find table '{TABLE_NAME}' on worksheet '{SHEET_NAME}'"):
         writer.write_trades(workbook_path, SHEET_NAME, [_trade()])
+
+    assert len(table.added_rows) == 0
+
+
+def _make_transient_com_error() -> Exception:
+    """Build an exception shaped like the real RPC_E_CALL_REJECTED failure."""
+    import pywintypes
+
+    return pywintypes.com_error(-2147418111, "Call was rejected by callee.", None, None)
+
+
+class FlakySheets:
+    """Iterable that fails with a transient COM error the first N times."""
+
+    def __init__(self, sheets: list[FakeSheet], fail_times: int) -> None:
+        self._sheets = sheets
+        self._remaining_failures = fail_times
+
+    def __iter__(self) -> Any:
+        if self._remaining_failures > 0:
+            self._remaining_failures -= 1
+            raise _make_transient_com_error()
+        return iter(self._sheets)
+
+
+class FlakyEnumerationSheets:
+    """Iterable that raises the secondary TypeError symptom the first N times."""
+
+    def __init__(self, sheets: list[FakeSheet], fail_times: int) -> None:
+        self._sheets = sheets
+        self._remaining_failures = fail_times
+
+    def __iter__(self) -> Any:
+        if self._remaining_failures > 0:
+            self._remaining_failures -= 1
+            raise TypeError("This object does not support enumeration")
+        return iter(self._sheets)
+
+
+def test_write_trades_retries_transient_com_error_on_sheet_lookup(monkeypatch: Any, tmp_path: Path) -> None:
+    workbook_path = tmp_path / "ledger.xlsx"
+    workbook_path.write_text("placeholder", encoding="utf-8")
+
+    headers = ["Stock", "Open Date", "B/S", "C"]
+    table = FakeTable(headers, [])
+    app = FakeApp([])
+    book = FakeBook(str(workbook_path.resolve()), table, app)
+    # Fail twice with a transient RPC_E_CALL_REJECTED-style error, then succeed.
+    book.sheets = FlakySheets([FakeSheet(table, SHEET_NAME)], fail_times=2)
+    app.books.append(book)
+
+    monkeypatch.setattr(writer, "xw", FakeXw(app))
+    monkeypatch.setattr(writer.time, "sleep", lambda _seconds: None)
+
+    written = writer.write_trades(workbook_path, SHEET_NAME, [_trade()])
+
+    assert written == 1
+    assert len(table.added_rows) == 1
+
+
+def test_write_trades_retries_enumeration_type_error_on_sheet_lookup(monkeypatch: Any, tmp_path: Path) -> None:
+    workbook_path = tmp_path / "ledger.xlsx"
+    workbook_path.write_text("placeholder", encoding="utf-8")
+
+    headers = ["Stock", "Open Date", "B/S", "C"]
+    table = FakeTable(headers, [])
+    app = FakeApp([])
+    book = FakeBook(str(workbook_path.resolve()), table, app)
+    # Fail with the secondary "does not support enumeration" TypeError, then succeed.
+    book.sheets = FlakyEnumerationSheets([FakeSheet(table, SHEET_NAME)], fail_times=1)
+    app.books.append(book)
+
+    monkeypatch.setattr(writer, "xw", FakeXw(app))
+    monkeypatch.setattr(writer.time, "sleep", lambda _seconds: None)
+
+    written = writer.write_trades(workbook_path, SHEET_NAME, [_trade()])
+
+    assert written == 1
+    assert len(table.added_rows) == 1
+
+
+def test_write_trades_raises_clear_error_when_com_never_recovers(monkeypatch: Any, tmp_path: Path) -> None:
+    workbook_path = tmp_path / "ledger.xlsx"
+    workbook_path.write_text("placeholder", encoding="utf-8")
+
+    headers = ["Stock", "Open Date", "B/S", "C"]
+    table = FakeTable(headers, [])
+    app = FakeApp([])
+    book = FakeBook(str(workbook_path.resolve()), table, app)
+    # Always fails — retries should be exhausted and a clear error raised.
+    book.sheets = FlakySheets([FakeSheet(table, SHEET_NAME)], fail_times=999)
+    app.books.append(book)
+
+    monkeypatch.setattr(writer, "xw", FakeXw(app))
+    monkeypatch.setattr(writer.time, "sleep", lambda _seconds: None)
+
+    with pytest.raises(RuntimeError, match="Excel COM server was busy/unresponsive"):
+        writer.write_trades(workbook_path, SHEET_NAME, [_trade()])
