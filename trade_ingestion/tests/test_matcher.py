@@ -117,19 +117,36 @@ def test_match_trades_orphan_close_creates_close_only_row() -> None:
     assert trade.stock == "SPY"
 
 
-def test_match_trades_lifecycle_event_resolves_original_open_lot_side() -> None:
+@pytest.mark.parametrize("opening_side", ["B", "S"])
+def test_match_trades_lifecycle_event_resolves_original_open_lot_side(opening_side: str) -> None:
     trades = match_trades(
         [
-            _event(lot_id="open-1", trade_date=date(2024, 1, 2), effect="OPEN", quantity=1.0, premium=2.0, fees=0.1, side="S"),
+            _event(lot_id="open-1", trade_date=date(2024, 1, 2), effect="OPEN", quantity=1.0, premium=2.0, fees=0.1, side=opening_side),
             _event(lot_id="close-1", trade_date=date(2024, 1, 3), effect="EXPIRED", quantity=1.0, premium=3.0, fees=0.2, side=None),
         ],
     )
 
     assert len(trades) == 1
     trade = trades[0]
-    assert trade.side == "S"
+    assert trade.side == opening_side
     assert trade.status == "Expired"
     assert trade.close_date == date(2024, 1, 3)
+
+
+def test_match_trades_lifecycle_event_prefers_long_open_lot_when_both_sides_exist() -> None:
+    trades = match_trades(
+        [
+            _event(lot_id="open-long", trade_date=date(2024, 1, 2), effect="OPEN", quantity=1.0, premium=2.0, fees=0.1, side="B"),
+            _event(lot_id="open-short", trade_date=date(2024, 1, 2), effect="OPEN", quantity=1.0, premium=2.0, fees=0.1, side="S"),
+            _event(lot_id="close-1", trade_date=date(2024, 1, 3), effect="EXPIRED", quantity=1.0, premium=3.0, fees=0.2, side=None),
+        ],
+    )
+
+    assert len(trades) == 2
+    closed_trade = next(trade for trade in trades if trade.close_date is not None)
+    assert closed_trade.side == "B"
+    assert closed_trade.lot_id == "open-long"
+    assert closed_trade.status == "Expired"
 
 
 def test_pre_aggregation_merges_same_day_events() -> None:
