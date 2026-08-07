@@ -7,7 +7,7 @@ import pytest
 
 import main
 from trade_ingestion.matcher import MatchResult
-from trade_ingestion.models import CanonicalTrade, RawEvent
+from trade_ingestion.models import CanonicalTrade, FidelityParseResult, RawEvent, ResolutionFailure
 from trade_ingestion.writer import ConversionFailure, WriteResult
 
 
@@ -59,9 +59,10 @@ def test_run_pipeline_uses_broker_adapter_and_writer(monkeypatch: Any, tmp_path:
         )
     ]
 
-    def fake_adapter(content: str) -> list[RawEvent]:
+    def fake_adapter(content: str, symbol_prompt: Any = None) -> FidelityParseResult:
         captured["content"] = content
-        return events
+        captured["symbol_prompt"] = symbol_prompt
+        return FidelityParseResult(events=events, symbol_failures=[])
 
     def fake_match_trades(input_events: list[RawEvent], existing_lot_ids: set[str] | None = None) -> MatchResult:
         captured["events"] = input_events
@@ -110,13 +111,20 @@ def test_main_parses_cli_arguments(monkeypatch: Any, capsys: pytest.CaptureFixtu
     workbook_path = tmp_path / "ledger.xlsx"
 
     def fake_run_pipeline(
-        *, broker: str, csv_path: Path, workbook_path: Path, sheet_name: str, ticker_prompt: Any = None
+        *,
+        broker: str,
+        csv_path: Path,
+        workbook_path: Path,
+        sheet_name: str,
+        ticker_prompt: Any = None,
+        symbol_prompt: Any = None,
     ) -> main.PipelineResult:
         assert broker == "fidelity"
         assert csv_path == tmp_path / "input.csv"
         assert workbook_path == tmp_path / "ledger.xlsx"
         assert sheet_name == "Trades"
         assert ticker_prompt is None
+        assert symbol_prompt is None
         return main.PipelineResult(rows_ingested=3, rows_skipped=2, open_positions=1)
 
     monkeypatch.setattr(main, "run_pipeline", fake_run_pipeline)
@@ -150,9 +158,16 @@ def test_main_skips_prompt_when_no_prompt_flag_is_set(
     captured: dict[str, Any] = {}
 
     def fake_run_pipeline(
-        *, broker: str, csv_path: Path, workbook_path: Path, sheet_name: str, ticker_prompt: Any = None
+        *,
+        broker: str,
+        csv_path: Path,
+        workbook_path: Path,
+        sheet_name: str,
+        ticker_prompt: Any = None,
+        symbol_prompt: Any = None,
     ) -> main.PipelineResult:
         captured["ticker_prompt"] = ticker_prompt
+        captured["symbol_prompt"] = symbol_prompt
         return main.PipelineResult(rows_ingested=1, rows_skipped=0, open_positions=1)
 
     monkeypatch.setattr(main, "run_pipeline", fake_run_pipeline)
@@ -164,6 +179,7 @@ def test_main_skips_prompt_when_no_prompt_flag_is_set(
 
     assert exit_code == 0
     assert captured["ticker_prompt"] is None
+    assert captured["symbol_prompt"] is None
 
 
 def test_main_enables_prompt_when_stdin_is_interactive(
@@ -174,9 +190,16 @@ def test_main_enables_prompt_when_stdin_is_interactive(
     captured: dict[str, Any] = {}
 
     def fake_run_pipeline(
-        *, broker: str, csv_path: Path, workbook_path: Path, sheet_name: str, ticker_prompt: Any = None
+        *,
+        broker: str,
+        csv_path: Path,
+        workbook_path: Path,
+        sheet_name: str,
+        ticker_prompt: Any = None,
+        symbol_prompt: Any = None,
     ) -> main.PipelineResult:
         captured["ticker_prompt"] = ticker_prompt
+        captured["symbol_prompt"] = symbol_prompt
         return main.PipelineResult(rows_ingested=1, rows_skipped=0, open_positions=1)
 
     monkeypatch.setattr(main, "run_pipeline", fake_run_pipeline)
@@ -186,6 +209,7 @@ def test_main_enables_prompt_when_stdin_is_interactive(
 
     assert exit_code == 0
     assert captured["ticker_prompt"] is main._prompt_for_replacement_ticker
+    assert captured["symbol_prompt"] is main._prompt_for_replacement_symbol
 
 
 def test_main_reports_conversion_failure_details(monkeypatch: Any, capsys: pytest.CaptureFixture[str], tmp_path: Path) -> None:
@@ -193,7 +217,13 @@ def test_main_reports_conversion_failure_details(monkeypatch: Any, capsys: pytes
     workbook_path = tmp_path / "ledger.xlsx"
 
     def fake_run_pipeline(
-        *, broker: str, csv_path: Path, workbook_path: Path, sheet_name: str, ticker_prompt: Any = None
+        *,
+        broker: str,
+        csv_path: Path,
+        workbook_path: Path,
+        sheet_name: str,
+        ticker_prompt: Any = None,
+        symbol_prompt: Any = None,
     ) -> main.PipelineResult:
         return main.PipelineResult(
             rows_ingested=1,
@@ -237,3 +267,43 @@ def test_main_reports_conversion_failure_details(monkeypatch: Any, capsys: pytes
     assert "Warning:" in output
     assert "Conversion failed for record" in output
     assert "SPXW" in output
+
+
+def test_main_reports_symbol_parse_failure_details(
+    monkeypatch: Any, capsys: pytest.CaptureFixture[str], tmp_path: Path
+) -> None:
+    csv_path = tmp_path / "input.csv"
+    workbook_path = tmp_path / "ledger.xlsx"
+
+    def fake_run_pipeline(
+        *,
+        broker: str,
+        csv_path: Path,
+        workbook_path: Path,
+        sheet_name: str,
+        ticker_prompt: Any = None,
+        symbol_prompt: Any = None,
+    ) -> main.PipelineResult:
+        return main.PipelineResult(
+            rows_ingested=0,
+            rows_skipped=0,
+            open_positions=0,
+            symbol_failures=[
+                ResolutionFailure(
+                    context_label="2027-01-15 Buy to Open HON2270115C250",
+                    input_value="HON2270115C250",
+                    attempted_value="HON2270115C250",
+                    error="Unsupported Fidelity option symbol format: HON2270115C250",
+                )
+            ],
+        )
+
+    monkeypatch.setattr(main, "run_pipeline", fake_run_pipeline)
+
+    exit_code = main.main(["fidelity", str(csv_path), "--workbook", str(workbook_path), "--sheet", "Trades"])
+
+    assert exit_code == 0
+    output = capsys.readouterr().out
+    assert "Warning:" in output
+    assert "Symbol parse failed for record" in output
+    assert "HON2270115C250" in output

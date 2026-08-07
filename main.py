@@ -6,14 +6,14 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Sequence
 
-from trade_ingestion.adapters import parse_fidelity_csv
+from trade_ingestion.adapters import parse_fidelity_csv_detailed
 from trade_ingestion.matcher import match_trades_with_summary
-from trade_ingestion.models import CanonicalTrade, RawEvent
+from trade_ingestion.models import CanonicalTrade, FidelityParseResult, ResolutionFailure
 from trade_ingestion.writer import ConversionFailure, write_trades_detailed
 
-Adapter = Callable[[str], list[RawEvent]]
+Adapter = Callable[[str, "Callable[[str, str], str | None] | None"], FidelityParseResult]
 ADAPTERS: dict[str, Adapter] = {
-    "fidelity": parse_fidelity_csv,
+    "fidelity": parse_fidelity_csv_detailed,
 }
 
 
@@ -24,6 +24,7 @@ class PipelineResult:
     open_positions: int
     failed_conversions: list[str] = field(default_factory=list)
     conversion_failures: list[ConversionFailure] = field(default_factory=list)
+    symbol_failures: list[ResolutionFailure] = field(default_factory=list)
 
 
 def run_pipeline(
@@ -33,6 +34,7 @@ def run_pipeline(
     workbook_path: Path,
     sheet_name: str,
     ticker_prompt: Callable[[str, CanonicalTrade], str | None] | None = None,
+    symbol_prompt: Callable[[str, str], str | None] | None = None,
 ) -> PipelineResult:
     adapter = ADAPTERS.get(broker.strip().lower())
     if adapter is None:
@@ -40,8 +42,8 @@ def run_pipeline(
         raise ValueError(f"Unsupported broker {broker!r}. Supported brokers: {supported}")
 
     csv_content = csv_path.read_text(encoding="utf-8-sig")
-    events = adapter(csv_content)
-    match_result = match_trades_with_summary(events)
+    parse_result = adapter(csv_content, symbol_prompt)
+    match_result = match_trades_with_summary(parse_result.events)
     write_result = write_trades_detailed(
         workbook_path,
         sheet_name,
@@ -57,6 +59,7 @@ def run_pipeline(
         open_positions=match_result.open_positions,
         failed_conversions=write_result.failed_conversions,
         conversion_failures=write_result.conversion_failures,
+        symbol_failures=parse_result.symbol_failures,
     )
 
 
@@ -90,10 +93,9 @@ def _stdin_is_interactive() -> bool:
         return False
 
 
-def _prompt_for_replacement_ticker(input_ticker: str, trade: CanonicalTrade) -> str | None:
-    record_label = trade.trade_id or trade.lot_id or trade.symbol or "trade"
+def _prompt_for_replacement_value(input_value: str, record_label: str, *, what: str) -> str | None:
     prompt_text = (
-        f"Could not resolve stock ticker {input_ticker!r} for record {record_label!r}. "
+        f"Could not resolve {what} {input_value!r} for record {record_label!r}. "
         "Enter an updated stock ticker to retry (leave blank to skip): "
     )
     try:
@@ -103,11 +105,22 @@ def _prompt_for_replacement_ticker(input_ticker: str, trade: CanonicalTrade) -> 
     return response or None
 
 
+def _prompt_for_replacement_ticker(input_ticker: str, trade: CanonicalTrade) -> str | None:
+    record_label = trade.trade_id or trade.lot_id or trade.symbol or "trade"
+    return _prompt_for_replacement_value(input_ticker, record_label, what="stock ticker")
+
+
+def _prompt_for_replacement_symbol(input_symbol: str, record_label: str) -> str | None:
+    return _prompt_for_replacement_value(input_symbol, record_label, what="option symbol")
+
+
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     ticker_prompt: Callable[[str, CanonicalTrade], str | None] | None = None
+    symbol_prompt: Callable[[str, str], str | None] | None = None
     if not args.no_prompt and _stdin_is_interactive():
         ticker_prompt = _prompt_for_replacement_ticker
+        symbol_prompt = _prompt_for_replacement_symbol
 
     result = run_pipeline(
         broker=args.broker,
@@ -115,6 +128,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         workbook_path=args.workbook,
         sheet_name=args.sheet,
         ticker_prompt=ticker_prompt,
+        symbol_prompt=symbol_prompt,
     )
     open_label = "open position" if result.open_positions == 1 else "open positions"
     print(
@@ -122,6 +136,21 @@ def main(argv: Sequence[str] | None = None) -> int:
         f"skipped {result.rows_skipped} duplicate rows; "
         f"left {result.open_positions} {open_label} unmatched"
     )
+    if result.symbol_failures:
+        row_count = len(result.symbol_failures)
+        row_label = "row" if row_count == 1 else "rows"
+        skip_verb = "was" if row_count == 1 else "were"
+        print(
+            f"Warning: {row_count} {row_label} could not be parsed and {skip_verb} "
+            "skipped due to an unsupported option symbol format."
+        )
+    for symbol_failure in result.symbol_failures:
+        attempted_symbol = symbol_failure.attempted_value or symbol_failure.input_value
+        print(
+            f"Symbol parse failed for record {symbol_failure.context_label!r} "
+            f"(input symbol {symbol_failure.input_value!r}; attempted symbol {attempted_symbol!r}): "
+            f"{symbol_failure.error}"
+        )
     if result.failed_conversions:
         tickers = ", ".join(sorted(set(result.failed_conversions)))
         row_label = "row" if len(result.failed_conversions) == 1 else "rows"

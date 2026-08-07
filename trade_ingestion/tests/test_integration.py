@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from trade_ingestion.adapters.fidelity import parse_fidelity_csv
+from trade_ingestion.adapters.fidelity import parse_fidelity_csv_detailed
 from trade_ingestion.matcher import match_trades_with_summary
 from trade_ingestion.models import CanonicalTrade
 
@@ -34,7 +34,7 @@ def test_fidelity_fixture_matches_expected_canonical_trades() -> None:
     """Fixture retains BOM and Fidelity disclaimer rows to exercise CSV parsing boundaries."""
     content = FIDELITY_HISTORY_FIXTURE.read_text(encoding="utf-8-sig")
 
-    events = parse_fidelity_csv(content)
+    events = parse_fidelity_csv_detailed(content).events
     result = match_trades_with_summary(events)
 
     expected = [

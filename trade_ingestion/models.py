@@ -3,6 +3,9 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from datetime import date
 from hashlib import sha256
+from typing import Generic, TypeVar
+
+T = TypeVar("T")
 
 
 @dataclass(slots=True)
@@ -56,6 +59,29 @@ class OpenLot:
     remaining_quantity: float
     remaining_fees: float | None
     split_index: int = field(default=0)
+
+
+@dataclass(slots=True)
+class ResolutionFailure(Generic[T]):
+    """Details about a resolution that could not be completed, even after a
+    single prompt-and-retry attempt (shared by the writer's stock-ticker
+    conversion recovery and the Fidelity adapter's option-symbol recovery)."""
+
+    context_label: str
+    input_value: str
+    attempted_value: str | None
+    error: str
+
+
+@dataclass(slots=True)
+class FidelityParseResult:
+    """Outcome of a parse_fidelity_csv_detailed run."""
+
+    events: list[RawEvent]
+    # Rows whose option symbol could not be parsed, even after a single
+    # prompt-and-retry attempt with an operator-supplied replacement ticker.
+    # These rows are skipped rather than aborting the whole import.
+    symbol_failures: list[ResolutionFailure] = field(default_factory=list)
 
 
 def make_trade_id(trade: CanonicalTrade) -> str:

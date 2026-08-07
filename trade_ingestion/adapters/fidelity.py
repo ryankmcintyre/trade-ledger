@@ -4,9 +4,12 @@ import csv
 import io
 import re
 from datetime import date, datetime
+from typing import Callable
 
 from constants import FIDELITY_BROKER_NAME
-from trade_ingestion.models import RawEvent, make_fallback_lot_id
+from trade_ingestion.models import FidelityParseResult, RawEvent, ResolutionFailure, make_fallback_lot_id
+from trade_ingestion.retry import resolve_with_retry
+
 DATE_FORMATS = ("%Y-%m-%d", "%m/%d/%Y", "%m/%d/%y", "%b-%d-%Y")
 OPTION_SYMBOL_RE = re.compile(
     r"^(?P<underlying>[A-Z.]+)\s+(?P<exp>\d{2}/\d{2}/\d{4})\s+(?P<strike>\d+(?:\.\d+)?)\s+(?P<cp>[CP])$"
@@ -18,6 +21,15 @@ OCC_SYMBOL_RE = re.compile(
 # zero-padded strike: e.g. -SPXW260618P7400, -NOK261016C16, or NVDL260807P26. This is distinct from full OCC format.
 FIDELITY_COMPACT_RE = re.compile(
     r"^(?:-)?(?P<underlying>[A-Z.]+)(?P<exp>\d{6})(?P<cp>[CP])(?P<strike>\d+(?:\.\d+)?)$"
+)
+# NOTE: Underlying symbols are normally letters/dots only ([A-Z.]+ above), but brokers
+# occasionally rename a ticker to include a digit after a corporate action (e.g. a stock
+# split renames HON to HON2 in the broker's own system while the public ticker is still
+# HON). None of the strict regexes above can match that. This fallback isolates the
+# trailing date+call/put+strike suffix regardless of what precedes it, so a malformed
+# prefix can still be spliced out and swapped for an operator-supplied replacement ticker.
+COMPACT_SUFFIX_RE = re.compile(
+    r"^(?P<dash>-?)(?P<prefix>.*?)(?P<exp>\d{6})(?P<cp>[CP])(?P<strike>\d+(?:\.\d+)?)$"
 )
 FIELD_ALIASES: dict[str, tuple[str, ...]] = {
     "trade_date": ("Run Date", "Trade Date", "Date", "Settlement Date"),
@@ -44,7 +56,10 @@ class FidelityParseError(ValueError):
 # NOTE: Fidelity transaction exports are expected to include a transaction identifier.
 # NOTE: When that identifier is missing, this adapter falls back to a deterministic hash
 # NOTE: of trade_date + symbol + quantity + premium, per the pipeline requirements.
-def parse_fidelity_csv(content: str) -> list[RawEvent]:
+def parse_fidelity_csv_detailed(
+    content: str,
+    symbol_prompt: Callable[[str, str], str | None] | None = None,
+) -> FidelityParseResult:
     rows = list(csv.reader(io.StringIO(content)))
     header_index = _find_header_index(rows)
     if header_index is None:
@@ -59,11 +74,14 @@ def parse_fidelity_csv(content: str) -> list[RawEvent]:
         next(reader, None)
 
     events: list[RawEvent] = []
+    symbol_failures: list[ResolutionFailure] = []
     for row in reader:
-        event = _parse_row(row)
+        event, failure = _parse_row(row, symbol_prompt)
         if event is not None:
             events.append(event)
-    return events
+        if failure is not None:
+            symbol_failures.append(failure)
+    return FidelityParseResult(events=events, symbol_failures=symbol_failures)
 
 
 def _find_header_index(rows: list[list[str]]) -> int | None:
@@ -76,15 +94,18 @@ def _find_header_index(rows: list[list[str]]) -> int | None:
     return None
 
 
-def _parse_row(row: dict[str, str | None]) -> RawEvent | None:
+def _parse_row(
+    row: dict[str, str | None],
+    symbol_prompt: Callable[[str, str], str | None] | None = None,
+) -> tuple[RawEvent | None, ResolutionFailure | None]:
     action = (_get_value(row, "action") or "").strip()
     mapping = _map_action(action)
     if mapping is None:
-        return None
+        return None, None
 
     symbol_text = (_get_value(row, "symbol") or "").strip()
     if not symbol_text:
-        return None
+        return None, None
 
     trade_date = _parse_date(_required_value(row, "trade_date"))
     quantity_raw = abs(_parse_float(_required_value(row, "quantity")))
@@ -92,7 +113,9 @@ def _parse_row(row: dict[str, str | None]) -> RawEvent | None:
     security_type = (_get_value(row, "security_type") or "").strip().lower()
 
     if mapping["instrument"] == "option" or "option" in security_type:
-        parsed_symbol = _normalize_option_symbol(symbol_text)
+        parsed_symbol, failure = _resolve_option_symbol(symbol_text, trade_date, action, symbol_prompt)
+        if parsed_symbol is None:
+            return None, failure
         quantity = quantity_raw
         premium = price
     else:
@@ -130,7 +153,7 @@ def _parse_row(row: dict[str, str | None]) -> RawEvent | None:
         quantity=quantity,
         fees=fees,
         effect=mapping["effect"],
-    )
+    ), None
 
 
 def _get_value(row: dict[str, str | None], alias_key: str) -> str | None:
@@ -200,6 +223,53 @@ def _map_action(action: str) -> dict[str, str] | None:
         return {"effect": "CLOSE", "side": "C", "instrument": "equity"}
 
     return None
+
+
+def _resolve_option_symbol(
+    symbol_text: str,
+    trade_date: date,
+    action: str,
+    symbol_prompt: Callable[[str, str], str | None] | None,
+) -> tuple[dict[str, object] | None, ResolutionFailure | None]:
+    """Normalize an option symbol, recovering from an unparseable prefix (e.g. a
+    broker-renamed ticker like "HON2") by prompting once for a replacement ticker
+    and retrying. On failure the caller skips the row rather than aborting the
+    whole import."""
+    context_label = f"{trade_date.isoformat()} {action} {symbol_text}".strip()
+
+    def try_resolve(candidate: str) -> tuple[dict[str, object] | None, str | None]:
+        try:
+            return _normalize_option_symbol(candidate), None
+        except (FidelityParseError, ValueError) as exc:
+            return None, str(exc)
+
+    def prompt(_input_symbol: str, _context_label: str) -> str | None:
+        replacement_ticker = symbol_prompt(symbol_text, context_label)  # type: ignore[misc]
+        if not replacement_ticker or not replacement_ticker.strip():
+            return None
+        return _reconstruct_compact_symbol(symbol_text, replacement_ticker)
+
+    return resolve_with_retry(
+        symbol_text,
+        context_label,
+        try_resolve,
+        prompt if symbol_prompt is not None else None,
+    )
+
+
+def _reconstruct_compact_symbol(symbol: str, replacement_ticker: str) -> str | None:
+    """Swap the prefix of a compact option symbol for a replacement ticker,
+    preserving the trailing date+call/put+strike suffix. Returns None if the
+    suffix can't be isolated at all (e.g. the legacy space-delimited format),
+    in which case there is nothing sensible to reconstruct.
+    """
+    match = COMPACT_SUFFIX_RE.match(symbol)
+    if not match:
+        return None
+    return (
+        f"{match.group('dash')}{replacement_ticker.strip()}"
+        f"{match.group('exp')}{match.group('cp')}{match.group('strike')}"
+    )
 
 
 def _normalize_option_symbol(symbol: str) -> dict[str, object]:
