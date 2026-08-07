@@ -9,6 +9,11 @@ from constants import UNDERLYING_DISPLAY_MAP
 from trade_ingestion.models import CanonicalTrade, OpenLot, RawEvent
 
 MATCH_EPSILON = 1e-9
+STATUS_OPEN = "Open"
+STATUS_CLOSED = "Closed"
+STATUS_ASSIGNED = "Assigned"
+STATUS_EXERCISED = "Exercised"
+STATUS_EXPIRED = "Expired"
 
 
 @dataclass(slots=True)
@@ -30,8 +35,8 @@ def match_trades_with_summary(events: list[RawEvent]) -> MatchResult:
 
     # TODO: Closes are matched FIFO within (account, symbol, side) due to missing broker open-lot references.
     for event in sorted(aggregated, key=_event_sort_key):
-        key = (event.account, event.symbol, event.side)
         if event.effect == "OPEN":
+            key = (event.account, event.symbol, event.side or "")
             open_lots[key].append(
                 OpenLot(
                     event=event,
@@ -43,7 +48,12 @@ def match_trades_with_summary(events: list[RawEvent]) -> MatchResult:
 
         remaining_close_quantity = event.quantity
         close_fee_rate = (event.fees or 0.0) / event.quantity if event.quantity else 0.0
-        lots = open_lots[key]
+        lots = None
+        for key in _matching_open_lot_keys(event):
+            if open_lots[key]:
+                lots = open_lots[key]
+                break
+
         while remaining_close_quantity > MATCH_EPSILON and lots:
             lot = lots[0]
             matched_quantity = min(lot.remaining_quantity, remaining_close_quantity)
@@ -57,6 +67,7 @@ def match_trades_with_summary(events: list[RawEvent]) -> MatchResult:
                 exit_price=event.premium,
                 close_date=event.trade_date,
                 split_suffix=None,
+                status=_resolve_trade_status(event.effect, is_open=False),
             )
             results.append(trade)
 
@@ -70,7 +81,12 @@ def match_trades_with_summary(events: list[RawEvent]) -> MatchResult:
         # Orphan close: no matching open lot — write as close-only row
         if remaining_close_quantity > MATCH_EPSILON:
             close_fees = close_fee_rate * remaining_close_quantity
-            trade = _make_orphan_close(event, remaining_close_quantity, close_fees if close_fees > 0.0 else None)
+            trade = _make_orphan_close(
+                event,
+                remaining_close_quantity,
+                close_fees if close_fees > 0.0 else None,
+                status=_resolve_trade_status(event.effect, is_open=False),
+            )
             results.append(trade)
 
     for lots in open_lots.values():
@@ -86,6 +102,7 @@ def match_trades_with_summary(events: list[RawEvent]) -> MatchResult:
                 exit_price=None,
                 close_date=None,
                 split_suffix=f"open-{lot.split_index}" if lot.remaining_quantity != lot.event.quantity else None,
+                status=STATUS_OPEN,
             )
             results.append(trade)
 
@@ -148,6 +165,17 @@ def _event_sort_key(event: RawEvent) -> tuple[object, int, str]:
     return (event.trade_date, 0 if event.effect == "OPEN" else 1, event.lot_id)
 
 
+def _matching_open_lot_keys(event: RawEvent) -> tuple[tuple[str, str, str], ...]:
+    if event.effect in {"ASSIGNED", "EXERCISED", "EXPIRED"} or event.side in {None, ""}:
+        # TODO: Lifecycle events do not carry side information, so we try the long open-lot queue
+        # TODO: before the short queue as a conservative default until broker data disambiguates it.
+        return (
+            (event.account, event.symbol, "B"),
+            (event.account, event.symbol, "S"),
+        )
+    return ((event.account, event.symbol, event.side),)
+
+
 def _allocate_fee(total_fee: float | None, quantity_pool: float, quantity_slice: float) -> float | None:
     if total_fee is None:
         return None
@@ -161,6 +189,34 @@ def _resolve_stock(underlying: str) -> str:
     return UNDERLYING_DISPLAY_MAP.get(underlying, underlying)
 
 
+def _resolve_trade_status(effect: str | None, *, is_open: bool) -> str:
+    normalized = (effect or "").strip().upper()
+
+    if normalized in {"ASSIGNED", "ASSIGN", "ASSIGNMENT"}:
+        return STATUS_ASSIGNED
+    if normalized in {"EXERCISED", "EXERCISE", "EXERCISENOTICE", "EXERCISE_NOTICE"}:
+        return STATUS_EXERCISED
+    if normalized in {"EXPIRED", "EXPIRE", "EXPIRATION", "EXPIRATIONNOTICE", "EXPIRATION_NOTICE"}:
+        return STATUS_EXPIRED
+    if normalized in {"OPEN", "OPENING", "BUY", "BUY_TO_OPEN"}:
+        return STATUS_OPEN
+    if normalized in {"CLOSE", "CLOSING", "SELL", "SELL_TO_CLOSE"}:
+        return STATUS_CLOSED
+
+    if normalized.startswith("ASSIGN"):
+        return STATUS_ASSIGNED
+    if normalized.startswith("EXERCISE"):
+        return STATUS_EXERCISED
+    if normalized.startswith("EXPIRE"):
+        return STATUS_EXPIRED
+    if normalized.startswith("OPEN"):
+        return STATUS_OPEN
+    if normalized.startswith("CLOSE"):
+        return STATUS_CLOSED
+
+    return STATUS_OPEN if is_open else STATUS_CLOSED
+
+
 def _make_trade(
     *,
     lot: OpenLot,
@@ -169,6 +225,7 @@ def _make_trade(
     exit_price: float | None,
     close_date: date | None,
     split_suffix: str | None,
+    status: str | None,
 ) -> CanonicalTrade:
     lot_id = lot.event.lot_id if split_suffix is None else f"{lot.event.lot_id}:{split_suffix}"
     return CanonicalTrade(
@@ -189,10 +246,11 @@ def _make_trade(
         close_date=close_date,
         account=lot.event.account,
         stock=_resolve_stock(lot.event.underlying),
+        status=status,
     )
 
 
-def _make_orphan_close(event: RawEvent, quantity: float, fees: float | None) -> CanonicalTrade:
+def _make_orphan_close(event: RawEvent, quantity: float, fees: float | None, *, status: str | None) -> CanonicalTrade:
     """Create a close-only row for sells without a matching open in the import data."""
     return CanonicalTrade(
         lot_id=event.lot_id,
@@ -212,4 +270,5 @@ def _make_orphan_close(event: RawEvent, quantity: float, fees: float | None) -> 
         close_date=event.trade_date,
         account=event.account,
         stock=_resolve_stock(event.underlying),
+        status=status,
     )

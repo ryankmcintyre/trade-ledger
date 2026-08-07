@@ -123,7 +123,7 @@ def _parse_row(row: dict[str, str | None]) -> RawEvent | None:
         trade_date=trade_date,
         exp_date=parsed_symbol["exp_date"],
         call_or_put=parsed_symbol["call_or_put"],
-        side=mapping["side"],
+        side=mapping.get("side"),
         strike=parsed_symbol["strike"],
         stock_price=_parse_optional_float(_get_value(row, "underlying_price")),
         premium=premium,
@@ -161,6 +161,15 @@ def _map_action(action: str) -> dict[str, str] | None:
     }
     if normalized in _EXACT:
         return _EXACT[normalized]
+
+    # NOTE: Fidelity emits assignment, exercise, and expiration rows as distinct lifecycle events;
+    # NOTE: route them through the matcher with explicit effects so the import can write statuses.
+    if "assigned" in normalized:
+        return {"effect": "ASSIGNED", "instrument": "option"}
+    if "exercised" in normalized:
+        return {"effect": "EXERCISED", "instrument": "option"}
+    if "expired" in normalized:
+        return {"effect": "EXPIRED", "instrument": "option"}
 
     # Verbose Fidelity descriptions: "YOU BOUGHT/SOLD [OPENING/CLOSING TRANSACTION] ..."
     bought = "you bought" in normalized

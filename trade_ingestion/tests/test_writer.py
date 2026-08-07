@@ -218,6 +218,7 @@ def test_write_trades_uses_column_mapping(monkeypatch: Any, tmp_path: Path) -> N
     monkeypatch.setattr(writer, "xw", FakeXw(app))
 
     trade = _trade()
+    trade.status = "Closed"
     written = writer.write_trades(workbook_path, SHEET_NAME, [trade])
 
     assert written == 1
@@ -237,6 +238,7 @@ def test_write_trades_uses_column_mapping(monkeypatch: Any, tmp_path: Path) -> N
     assert row[13] == 1.0  # C (quantity)
     assert row[18] == 3.0  # Exit Price
     assert row[19] == date(2024, 1, 5)  # Close Date
+    assert row[25] == "Closed"  # Status
     assert row[26] == "Fidelity"  # Account
     # Formula columns should NOT be written
     assert 8 not in row  # DTE

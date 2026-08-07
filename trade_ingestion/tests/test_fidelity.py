@@ -238,3 +238,18 @@ def test_parse_fidelity_csv_accepts_activity_description_action_alias() -> None:
     assert events[0].side == "C"
     assert events[1].effect == "CLOSE"
     assert events[1].side == "C"
+
+
+def test_parse_fidelity_csv_emits_lifecycle_effects_for_assigned_exercised_and_expired() -> None:
+   content = """Trade Date,Action,Symbol,Quantity,Price,Commission,Account,Transaction ID,Security Type
+   2024-01-02,Assigned,SPY 01/19/2024 450 C,1,0.50,0.65,IRA-1,ASSIGN-1,Option
+   2024-01-03,Exercised,SPY 01/19/2024 450 C,1,0.50,0.65,IRA-1,EXERCISE-1,Option
+   2024-01-04,Expired,SPY 01/19/2024 450 C,1,0.00,0.65,IRA-1,EXPIRE-1,Option
+   """
+
+   events = parse_fidelity_csv(content)
+
+   assert len(events) == 3
+   assert [event.effect for event in events] == ["ASSIGNED", "EXERCISED", "EXPIRED"]
+   assert [event.side for event in events] == [None, None, None]
+   assert [event.quantity for event in events] == [1.0, 1.0, 1.0]
