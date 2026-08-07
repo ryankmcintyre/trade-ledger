@@ -251,5 +251,5 @@ def test_parse_fidelity_csv_emits_lifecycle_effects_for_assigned_exercised_and_e
 
    assert len(events) == 3
    assert [event.effect for event in events] == ["ASSIGNED", "EXERCISED", "EXPIRED"]
-   assert [event.side for event in events] == ["S", "B", "B"]
+   assert [event.side for event in events] == [None, None, None]
    assert [event.quantity for event in events] == [1.0, 1.0, 1.0]

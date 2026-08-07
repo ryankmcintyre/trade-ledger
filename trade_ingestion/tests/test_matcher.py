@@ -14,6 +14,7 @@ def _event(
     quantity: float,
     premium: float,
     fees: float | None = None,
+    side: str | None = "B",
 ) -> RawEvent:
     return RawEvent(
         lot_id=lot_id,
@@ -24,7 +25,7 @@ def _event(
         trade_date=trade_date,
         exp_date=date(2024, 1, 19),
         call_or_put="C",
-        side="B",
+        side=side,
         strike=450.0,
         stock_price=470.0,
         premium=premium,
@@ -114,6 +115,21 @@ def test_match_trades_orphan_close_creates_close_only_row() -> None:
     assert trade.close_date == date(2024, 1, 3)
     assert trade.quantity == 1.0
     assert trade.stock == "SPY"
+
+
+def test_match_trades_lifecycle_event_resolves_original_open_lot_side() -> None:
+    trades = match_trades(
+        [
+            _event(lot_id="open-1", trade_date=date(2024, 1, 2), effect="OPEN", quantity=1.0, premium=2.0, fees=0.1, side="S"),
+            _event(lot_id="close-1", trade_date=date(2024, 1, 3), effect="EXPIRED", quantity=1.0, premium=3.0, fees=0.2, side=None),
+        ],
+    )
+
+    assert len(trades) == 1
+    trade = trades[0]
+    assert trade.side == "S"
+    assert trade.status == "Expired"
+    assert trade.close_date == date(2024, 1, 3)
 
 
 def test_pre_aggregation_merges_same_day_events() -> None:

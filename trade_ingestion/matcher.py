@@ -35,8 +35,8 @@ def match_trades_with_summary(events: list[RawEvent]) -> MatchResult:
 
     # TODO: Closes are matched FIFO within (account, symbol, side) due to missing broker open-lot references.
     for event in sorted(aggregated, key=_event_sort_key):
-        key = (event.account, event.symbol, event.side)
         if event.effect == "OPEN":
+            key = (event.account, event.symbol, event.side or "")
             open_lots[key].append(
                 OpenLot(
                     event=event,
@@ -48,7 +48,12 @@ def match_trades_with_summary(events: list[RawEvent]) -> MatchResult:
 
         remaining_close_quantity = event.quantity
         close_fee_rate = (event.fees or 0.0) / event.quantity if event.quantity else 0.0
-        lots = open_lots[key]
+        lots = None
+        for key in _matching_open_lot_keys(event):
+            if open_lots[key]:
+                lots = open_lots[key]
+                break
+
         while remaining_close_quantity > MATCH_EPSILON and lots:
             lot = lots[0]
             matched_quantity = min(lot.remaining_quantity, remaining_close_quantity)
@@ -158,6 +163,20 @@ def _pre_aggregate(events: list[RawEvent]) -> list[RawEvent]:
 
 def _event_sort_key(event: RawEvent) -> tuple[object, int, str]:
     return (event.trade_date, 0 if event.effect == "OPEN" else 1, event.lot_id)
+
+
+def _matching_open_lot_keys(event: RawEvent) -> tuple[tuple[str, str, str], ...]:
+    if event.effect in {"ASSIGNED", "EXERCISED", "EXPIRED"}:
+        return (
+            (event.account, event.symbol, "B"),
+            (event.account, event.symbol, "S"),
+        )
+    if event.side in {None, ""}:
+        return (
+            (event.account, event.symbol, "B"),
+            (event.account, event.symbol, "S"),
+        )
+    return ((event.account, event.symbol, event.side),)
 
 
 def _allocate_fee(total_fee: float | None, quantity_pool: float, quantity_slice: float) -> float | None:
