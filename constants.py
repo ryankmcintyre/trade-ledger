@@ -23,6 +23,15 @@ FIELD_TO_COLUMN: dict[str, str] = {
 # Columns used to form the composite dedup key when reading existing rows.
 DEDUP_COLUMNS: tuple[str, ...] = ("Stock", "Open Date", "B/S", "C")
 
+# Formula-driven column holding the ticker resolved from the Column A Stocks entity.
+STOCK_SYMBOL_COLUMN = "Stock Symbol"
+
+# Excel linked data type service identifier for Stocks, and the culture used to
+# resolve the entity. Column A must hold a Stocks entity (not text) because the
+# workbook drives "Stock Symbol" and "Current Stock Price" from _FV(A, ...).
+STOCKS_SERVICE_ID = 268435456
+LINKED_DATA_TYPE_CULTURE = "en-US"
+
 # Maps option root symbols to the display name written to Column A (Stock).
 # Regular equity tickers are written as-is.
 UNDERLYING_DISPLAY_MAP: dict[str, str] = {

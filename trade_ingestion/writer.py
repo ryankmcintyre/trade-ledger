@@ -1,13 +1,21 @@
 from __future__ import annotations
 
 import time
+from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
 from typing import Any, Callable, TypeVar
 
 import xlwings as xw
 
-from constants import DEDUP_COLUMNS, FIELD_TO_COLUMN, TABLE_NAME
+from constants import (
+    DEDUP_COLUMNS,
+    FIELD_TO_COLUMN,
+    LINKED_DATA_TYPE_CULTURE,
+    STOCK_SYMBOL_COLUMN,
+    STOCKS_SERVICE_ID,
+    TABLE_NAME,
+)
 from trade_ingestion.models import CanonicalTrade
 
 try:  # pragma: no cover - pywin32 is only importable on Windows
@@ -94,7 +102,28 @@ def _call_with_com_retry(
     ) from last_error
 
 
+@dataclass(slots=True)
+class WriteResult:
+    """Outcome of a write_trades run."""
+
+    rows_written: int
+    # Underlying tickers whose Column A cell could not be converted to the Stocks
+    # linked data type; those rows keep the plain Column A text and their
+    # formula-driven "Stock Symbol"/"Current Stock Price" columns will not resolve.
+    # NOTE: the underlying ticker is reported rather than CanonicalTrade.stock,
+    # because the latter is a Column A *display* value that may have been remapped
+    # via UNDERLYING_DISPLAY_MAP (e.g. "SPXW" -> "S&P 500 INDEX").
+    failed_conversions: list[str]
+
+
 def write_trades(workbook_path: Path, sheet_name: str, trades: list[CanonicalTrade]) -> int:
+    """Append trades to tbl_trades and return the number of rows written."""
+    return write_trades_detailed(workbook_path, sheet_name, trades).rows_written
+
+
+def write_trades_detailed(
+    workbook_path: Path, sheet_name: str, trades: list[CanonicalTrade]
+) -> WriteResult:
     workbook, app, was_open = _open_workbook(workbook_path)
     try:
         sheet = _find_sheet(workbook, sheet_name)
@@ -115,6 +144,10 @@ def write_trades(workbook_path: Path, sheet_name: str, trades: list[CanonicalTra
                 pending.append(trade)
 
         insertion_position = _last_populated_row_position(table, headers) + 1
+        stock_column = header_positions.get(FIELD_TO_COLUMN["stock"])
+        symbol_column = headers.index(STOCK_SYMBOL_COLUMN) + 1 if STOCK_SYMBOL_COLUMN in headers else None
+        failed_conversions: list[str] = []
+
         for trade in pending:
             row = _call_with_com_retry(
                 lambda insertion_position=insertion_position: table.ListRows.Add(
@@ -140,14 +173,96 @@ def write_trades(workbook_path: Path, sheet_name: str, trades: list[CanonicalTra
                     sheet.range((base_row, base_column + cell_index - 1)).value = value
 
                 _call_with_com_retry(_write_cell)
+
+            if stock_column is not None and trade.stock:
+                converted = _convert_stock_cell(
+                    sheet,
+                    row_number=base_row,
+                    stock_cell_column=base_column + stock_column - 1,
+                    symbol_cell_column=(
+                        base_column + symbol_column - 1 if symbol_column is not None else None
+                    ),
+                    ticker=trade.stock,
+                )
+                if not converted:
+                    failed_conversions.append(trade.underlying or trade.stock)
+
             insertion_position += 1
 
         _call_with_com_retry(workbook.save)
-        return len(pending)
+        return WriteResult(rows_written=len(pending), failed_conversions=failed_conversions)
     finally:
         if not was_open:
             workbook.close()
             app.quit()
+
+
+# NOTE: Column A ("Stock") is not a text column in the workbook — it must hold an
+# NOTE: Excel Stocks *linked data type* entity, because "Stock Symbol" and
+# NOTE: "Current Stock Price" are driven by _FV(A, ...) formulas which only accept a
+# NOTE: rich value. Writing a plain ticker string leaves those columns unresolved.
+# NOTE: Converting requires Microsoft 365 with the Stocks data type available and an
+# NOTE: internet connection; otherwise the conversion is a no-op and we fall back to text.
+def _convert_stock_cell(
+    sheet: Any,
+    *,
+    row_number: int,
+    stock_cell_column: int,
+    symbol_cell_column: int | None,
+    ticker: str,
+) -> bool:
+    """Convert one Column A cell to the Stocks data type. Return True on success.
+
+    TODO: Excel offers no programmatic way to disambiguate an ambiguous ticker match,
+    so we verify the result via the resolved "Stock Symbol" column and conservatively
+    restore the plain ticker text when the entity did not resolve.
+    """
+    # TODO: cells are converted one at a time rather than as a single batched range.
+    # This costs one COM round-trip per row but is what makes per-row verification and
+    # fallback possible; revisit if ingest volume makes it slow.
+    stock_cell = sheet.range((row_number, stock_cell_column))
+    try:
+        _call_with_com_retry(
+            lambda: stock_cell.api.ConvertToLinkedDataType(
+                ServiceID=STOCKS_SERVICE_ID,
+                LanguageCulture=LINKED_DATA_TYPE_CULTURE,
+            )
+        )
+    except Exception:  # noqa: BLE001 - conversion is best-effort; ingest must not fail
+        _restore_plain_ticker(stock_cell, ticker)
+        return False
+
+    if symbol_cell_column is None:
+        # Without the verification column we cannot confirm the entity resolved, so
+        # undo the conversion by rewriting plain text. This keeps the workbook state
+        # consistent with the failure we report, and keeps Column A readable for dedup.
+        _restore_plain_ticker(stock_cell, ticker)
+        return False
+
+    resolved = _call_with_com_retry(lambda: sheet.range((row_number, symbol_cell_column)).value)
+    if _is_resolved_symbol(resolved):
+        return True
+
+    _restore_plain_ticker(stock_cell, ticker)
+    return False
+
+
+def _restore_plain_ticker(stock_cell: Any, ticker: str) -> None:
+    """Put the plain ticker back so a failed row still carries usable data."""
+    try:
+        _call_with_com_retry(lambda: setattr(stock_cell, "value", ticker))
+    except Exception:  # noqa: BLE001 - already on the failure path
+        pass
+
+
+def _is_resolved_symbol(value: Any) -> bool:
+    if value is None:
+        return False
+    text = str(value).strip()
+    if not text:
+        return False
+    # Excel surfaces unresolved linked data as #FIELD!/#VALUE!/#N/A error text.
+    return not text.startswith("#")
 
 
 def read_existing_lot_ids(workbook_path: Path, sheet_name: str) -> set[str]:
@@ -192,11 +307,18 @@ def _existing_dedup_keys(table: Any, headers: list[str]) -> set[str]:
     col_indices: dict[str, int | None] = {}
     for col_name in DEDUP_COLUMNS:
         col_indices[col_name] = headers.index(col_name) if col_name in headers else None
+    # NOTE: once Column A holds a Stocks entity, reading it returns the entity's display
+    # NOTE: name (e.g. "GraniteShares ETF Trust") rather than the ticker we wrote. The
+    # NOTE: resolved "Stock Symbol" column is therefore the reliable dedup source.
+    symbol_index = headers.index(STOCK_SYMBOL_COLUMN) if STOCK_SYMBOL_COLUMN in headers else None
 
     for row in rows:
         parts: list[str] = []
         for col_name in DEDUP_COLUMNS:
             idx = col_indices[col_name]
+            if col_name == "Stock":
+                parts.append(_row_ticker(row, idx, symbol_index))
+                continue
             if idx is None:
                 parts.append("")
                 continue
@@ -218,6 +340,23 @@ def _existing_dedup_keys(table: Any, headers: list[str]) -> set[str]:
             values.add(key)
 
     return values
+
+
+def _row_ticker(row: list[Any], stock_index: int | None, symbol_index: int | None) -> str:
+    """Return the ticker for a row, preferring the resolved "Stock Symbol" column.
+
+    Column A may hold a Stocks entity whose value reads back as a company/fund name,
+    so the formula-resolved symbol is used when available and falls back to Column A.
+    """
+    if symbol_index is not None and symbol_index < len(row):
+        symbol_value = row[symbol_index]
+        if _is_resolved_symbol(symbol_value):
+            return str(symbol_value).strip()
+    if stock_index is not None and stock_index < len(row):
+        stock_value = row[stock_index]
+        if stock_value not in (None, ""):
+            return str(stock_value)
+    return ""
 
 
 def _excel_serial_to_date(serial: float) -> date | None:
