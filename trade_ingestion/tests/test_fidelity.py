@@ -179,6 +179,17 @@ def test_parse_fidelity_csv_accepts_compact_option_symbol_without_leading_dash()
     assert event.side == "B"
 
 
+def test_parse_fidelity_csv_treats_dashed_commission_as_zero() -> None:
+    content = """Trade Date,Action,Symbol,Quantity,Price,Commission,Account,Transaction ID,Security Type
+    2024-01-02,Buy,AAPL,100,180.50,--,IRA-1,EQ-BUY,Equity
+    """
+
+    events = parse_fidelity_csv(content)
+
+    assert len(events) == 1
+    assert events[0].fees is None
+
+
 def test_parse_fidelity_csv_with_short_form_actions() -> None:
     """Short-form actions (Buy, Sell, Buy to Open) with Transaction ID column."""
     content = """Metadata,Value
