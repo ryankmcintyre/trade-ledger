@@ -17,6 +17,7 @@ from constants import (
     TABLE_NAME,
 )
 from trade_ingestion.models import CanonicalTrade
+from trade_ingestion.retry import resolve_with_retry
 
 try:  # pragma: no cover - pywin32 is only importable on Windows
     import pythoncom
@@ -243,61 +244,32 @@ def _convert_stock_cell_with_recovery(
     if not input_ticker:
         return False, None
 
-    converted, error_message = _convert_stock_cell(
-        sheet,
-        row_number=row_number,
-        stock_cell_column=stock_cell_column,
-        symbol_cell_column=symbol_cell_column,
-        ticker=input_ticker,
-    )
-    if converted:
+    def try_convert(ticker: str) -> tuple[bool | None, str | None]:
+        # Retrying with a replacement ticker means the cell must hold that
+        # replacement's text before Excel can convert it — a no-op on the
+        # first attempt, since the row-writing loop already wrote input_ticker.
+        _set_plain_ticker(sheet, row_number, stock_cell_column, ticker)
+        converted, error_message = _convert_stock_cell(
+            sheet,
+            row_number=row_number,
+            stock_cell_column=stock_cell_column,
+            symbol_cell_column=symbol_cell_column,
+            ticker=ticker,
+        )
+        return (True if converted else None), error_message
+
+    context_label = trade.trade_id or trade.lot_id or trade.symbol or "trade"
+    resolved_prompt = (lambda value, _label, trade=trade: ticker_prompt(value, trade)) if ticker_prompt else None
+    result, failure = resolve_with_retry(input_ticker, context_label, try_convert, resolved_prompt)
+    if result:
         return True, None
-
-    if ticker_prompt is None:
-        return False, _make_conversion_failure(trade, input_ticker, input_ticker, error_message)
-
-    try:
-        replacement_ticker = ticker_prompt(input_ticker, trade)
-    except Exception as exc:  # noqa: BLE001 - prompt failures are best-effort and should not abort ingestion
-        return False, _make_conversion_failure(trade, input_ticker, input_ticker, f"Prompt failed: {exc}")
-
-    if replacement_ticker is None:
-        return False, _make_conversion_failure(trade, input_ticker, input_ticker, error_message)
-
-    replacement_text = replacement_ticker.strip()
-    if not replacement_text:
-        return False, _make_conversion_failure(trade, input_ticker, input_ticker, error_message)
-
-    _set_plain_ticker(sheet, row_number, stock_cell_column, replacement_text)
-    converted, retry_error = _convert_stock_cell(
-        sheet,
-        row_number=row_number,
-        stock_cell_column=stock_cell_column,
-        symbol_cell_column=symbol_cell_column,
-        ticker=replacement_text,
-    )
-    if converted:
-        return True, None
-
-    return False, _make_conversion_failure(
-        trade,
-        input_ticker,
-        replacement_text,
-        retry_error or error_message or "Ticker did not resolve",
-    )
-
-
-def _make_conversion_failure(
-    trade: CanonicalTrade,
-    input_ticker: str,
-    attempted_ticker: str | None,
-    error: str | None,
-) -> ConversionFailure:
-    return ConversionFailure(
+    if failure is None:
+        return False, None
+    return False, ConversionFailure(
         trade=trade,
-        input_ticker=input_ticker,
-        attempted_ticker=attempted_ticker,
-        error=error or "Ticker did not resolve",
+        input_ticker=failure.input_value,
+        attempted_ticker=failure.attempted_value,
+        error=failure.error,
     )
 
 

@@ -2,7 +2,7 @@ from datetime import date
 
 import pytest
 
-from trade_ingestion.adapters.fidelity import parse_fidelity_csv
+from trade_ingestion.adapters.fidelity import parse_fidelity_csv, parse_fidelity_csv_detailed
 
 
 def test_parse_fidelity_csv_accepts_abbreviated_month_date() -> None:
@@ -253,3 +253,92 @@ def test_parse_fidelity_csv_emits_lifecycle_effects_for_assigned_exercised_and_e
    assert [event.effect for event in events] == ["ASSIGNED", "EXERCISED", "EXPIRED"]
    assert [event.side for event in events] == [None, None, None]
    assert [event.quantity for event in events] == [1.0, 1.0, 1.0]
+
+
+def _renamed_ticker_csv() -> str:
+    return (
+        "Trade Date,Action,Symbol,Quantity,Price,Commission,Account,Transaction ID,Security Type\n"
+        "2027-01-15,Buy to Open,HON2270115C250,1,2.15,0.65,IRA-1,OPT-BUY,Option\n"
+        "2027-01-16,Buy,AAPL,100,180.50,1.00,IRA-1,EQ-BUY,Equity\n"
+    )
+
+
+def test_parse_fidelity_csv_detailed_recovers_renamed_ticker_via_prompt() -> None:
+    content = _renamed_ticker_csv()
+    prompts: list[tuple[str, str]] = []
+
+    def symbol_prompt(input_symbol: str, context_label: str) -> str | None:
+        prompts.append((input_symbol, context_label))
+        return "HON"
+
+    result = parse_fidelity_csv_detailed(content, symbol_prompt=symbol_prompt)
+
+    assert result.symbol_failures == []
+    assert len(result.events) == 2
+    option_event, equity_event = result.events
+    assert option_event.underlying == "HON"
+    assert option_event.symbol == "HON 270115C00250000"
+    assert option_event.exp_date == date(2027, 1, 15)
+    assert option_event.strike == 250.0
+    assert option_event.call_or_put == "C"
+    assert equity_event.symbol == "AAPL"
+    assert prompts == [("HON2270115C250", "2027-01-15 Buy to Open HON2270115C250")]
+
+
+def test_parse_fidelity_csv_detailed_skips_row_when_prompt_declines() -> None:
+    content = _renamed_ticker_csv()
+
+    def symbol_prompt(input_symbol: str, context_label: str) -> str | None:
+        return None
+
+    result = parse_fidelity_csv_detailed(content, symbol_prompt=symbol_prompt)
+
+    assert len(result.events) == 1
+    assert result.events[0].symbol == "AAPL"
+    assert len(result.symbol_failures) == 1
+    failure = result.symbol_failures[0]
+    assert failure.input_value == "HON2270115C250"
+    assert failure.attempted_value == "HON2270115C250"
+    assert "Unsupported Fidelity option symbol format" in failure.error
+
+
+def test_parse_fidelity_csv_detailed_skips_row_without_prompt_and_continues() -> None:
+    content = _renamed_ticker_csv()
+
+    result = parse_fidelity_csv_detailed(content)
+
+    assert len(result.events) == 1
+    assert result.events[0].symbol == "AAPL"
+    assert len(result.symbol_failures) == 1
+    assert result.symbol_failures[0].input_value == "HON2270115C250"
+
+
+def test_parse_fidelity_csv_detailed_records_failure_when_retry_ticker_still_unparseable() -> None:
+    content = _renamed_ticker_csv()
+
+    def symbol_prompt(input_symbol: str, context_label: str) -> str | None:
+        # Replacement itself contains a digit, so it still can't be parsed.
+        return "HON3"
+
+    result = parse_fidelity_csv_detailed(content, symbol_prompt=symbol_prompt)
+
+    assert len(result.events) == 1
+    assert result.events[0].symbol == "AAPL"
+    assert len(result.symbol_failures) == 1
+    failure = result.symbol_failures[0]
+    assert failure.attempted_value == "HON3270115C250"
+
+
+def test_parse_fidelity_csv_still_raises_for_missing_header() -> None:
+    with pytest.raises(Exception):
+        parse_fidelity_csv("not,a,valid,header\n1,2,3,4\n")
+
+
+def test_parse_fidelity_csv_backward_compatible_wrapper_skips_unresolvable_rows() -> None:
+    content = _renamed_ticker_csv()
+
+    events = parse_fidelity_csv(content)
+
+    assert len(events) == 1
+    assert events[0].symbol == "AAPL"
+
