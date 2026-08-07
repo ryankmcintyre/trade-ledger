@@ -32,6 +32,11 @@ _COM_RETRY_BASE_DELAY = 0.2
 T = TypeVar("T")
 
 
+class ComRetryExhaustedError(RuntimeError):
+    """Raised when a COM call keeps failing with a transient/busy error
+    even after all retry attempts have been exhausted."""
+
+
 def _is_retryable_com_error(exc: BaseException) -> bool:
     """Return True if `exc` looks like a transient COM busy/rejected-call error.
 
@@ -60,8 +65,8 @@ def _call_with_com_retry(
 
     Between attempts we pump Excel's pending Windows message queue (this is
     what actually clears RPC_E_CALL_REJECTED) and back off briefly before
-    retrying. If every attempt fails, raise a clear RuntimeError instead of
-    letting the confusing raw COM/TypeError propagate.
+    retrying. If every attempt fails, raise a clear ComRetryExhaustedError
+    instead of letting the confusing raw COM/TypeError propagate.
     """
     last_error: BaseException | None = None
     for attempt in range(1, attempts + 1):
@@ -73,9 +78,15 @@ def _call_with_com_retry(
             last_error = exc
             if attempt < attempts:
                 if pythoncom is not None:
-                    pythoncom.PumpWaitingMessages()
+                    try:
+                        pythoncom.PumpWaitingMessages()
+                    except Exception:  # noqa: BLE001 - pumping is best-effort
+                        # If pumping fails (e.g. COM not initialized on this
+                        # thread) we still want to keep retrying rather than
+                        # abort the whole retry loop.
+                        pass
                 time.sleep(base_delay * attempt)
-    raise RuntimeError(
+    raise ComRetryExhaustedError(
         "Excel COM server was busy/unresponsive and rejected the call after "
         f"{attempts} retries. The workbook may be showing a dialog, "
         "recalculating, or otherwise blocked. Original error: "
@@ -237,7 +248,7 @@ def _find_table(workbook: Any, sheet_name: str, table_name: str) -> Any:
     sheet = _find_sheet(workbook, sheet_name)
     try:
         return _call_with_com_retry(lambda: sheet.api.ListObjects(table_name))
-    except RuntimeError:
+    except ComRetryExhaustedError:
         # Exhausted retries on a transient COM error — surface that clearly
         # rather than masking it as "table not found".
         raise

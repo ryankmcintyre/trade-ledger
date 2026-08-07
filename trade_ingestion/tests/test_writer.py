@@ -10,6 +10,18 @@ from constants import TABLE_NAME
 import trade_ingestion.writer as writer
 from trade_ingestion.models import CanonicalTrade
 
+try:  # pragma: no cover - pywin32 is only importable on Windows
+    import pywintypes
+except ImportError:  # pragma: no cover - non-Windows/no-pywin32 environments
+
+    class _FakeComError(Exception):
+        """Stand-in for pywintypes.com_error when pywin32 isn't installed."""
+
+    class _FakePywintypes:
+        com_error = _FakeComError
+
+    pywintypes = _FakePywintypes()  # type: ignore[assignment]
+
 SHEET_NAME = "Trades"
 
 
@@ -325,8 +337,6 @@ def test_write_trades_rejects_missing_table_on_sheet(monkeypatch: Any, tmp_path:
 
 def _make_transient_com_error() -> Exception:
     """Build an exception shaped like the real RPC_E_CALL_REJECTED failure."""
-    import pywintypes
-
     return pywintypes.com_error(-2147418111, "Call was rejected by callee.", None, None)
 
 
@@ -371,6 +381,7 @@ def test_write_trades_retries_transient_com_error_on_sheet_lookup(monkeypatch: A
     app.books.append(book)
 
     monkeypatch.setattr(writer, "xw", FakeXw(app))
+    monkeypatch.setattr(writer, "pywintypes", pywintypes)
     monkeypatch.setattr(writer.time, "sleep", lambda _seconds: None)
 
     written = writer.write_trades(workbook_path, SHEET_NAME, [_trade()])
@@ -413,7 +424,8 @@ def test_write_trades_raises_clear_error_when_com_never_recovers(monkeypatch: An
     app.books.append(book)
 
     monkeypatch.setattr(writer, "xw", FakeXw(app))
+    monkeypatch.setattr(writer, "pywintypes", pywintypes)
     monkeypatch.setattr(writer.time, "sleep", lambda _seconds: None)
 
-    with pytest.raises(RuntimeError, match="Excel COM server was busy/unresponsive"):
+    with pytest.raises(writer.ComRetryExhaustedError, match="Excel COM server was busy/unresponsive"):
         writer.write_trades(workbook_path, SHEET_NAME, [_trade()])
