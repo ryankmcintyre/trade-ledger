@@ -675,6 +675,51 @@ def test_write_trades_reports_unresolved_conversion_and_keeps_plain_text(
     assert table.added_rows[0][1] == "SPXW"
 
 
+def test_write_trades_retries_with_prompted_ticker(monkeypatch: Any, tmp_path: Path) -> None:
+    workbook_path, table, book, app = _build_workbook(tmp_path, FULL_HEADERS, [])
+    monkeypatch.setattr(writer, "xw", FakeXw(app))
+    book.sheets[0].stock_resolver = lambda ticker: ticker if ticker == "SPY" else "#FIELD!"
+
+    def prompt(original_ticker: str, trade: CanonicalTrade) -> str | None:
+        assert original_ticker == "SPXW"
+        assert trade.stock == "SPXW"
+        return "SPY"
+
+    result = writer.write_trades_detailed(
+        workbook_path,
+        SHEET_NAME,
+        [_trade(stock="SPXW")],
+        ticker_prompt=prompt,
+    )
+
+    assert result.rows_written == 1
+    assert result.failed_conversions == []
+    assert result.conversion_failures == []
+    assert len(book.sheets[0].conversion_calls) == 2
+    assert table.added_rows[0][1] == "SPY"
+
+
+def test_write_trades_records_prompt_retry_failure(monkeypatch: Any, tmp_path: Path) -> None:
+    workbook_path, table, book, app = _build_workbook(tmp_path, FULL_HEADERS, [])
+    monkeypatch.setattr(writer, "xw", FakeXw(app))
+    book.sheets[0].stock_resolver = lambda ticker: "#FIELD!"
+
+    result = writer.write_trades_detailed(
+        workbook_path,
+        SHEET_NAME,
+        [_trade(stock="SPXW")],
+        ticker_prompt=lambda _original, _trade: "SPY",
+    )
+
+    assert result.rows_written == 1
+    assert result.failed_conversions == ["SPXW"]
+    assert len(result.conversion_failures) == 1
+    assert result.conversion_failures[0].input_ticker == "SPXW"
+    assert result.conversion_failures[0].attempted_ticker == "SPY"
+    assert "could not be resolved" in result.conversion_failures[0].error.lower()
+    assert table.added_rows[0][1] == "SPY"
+
+
 def test_write_trades_survives_conversion_com_error(monkeypatch: Any, tmp_path: Path) -> None:
     workbook_path, table, book, app = _build_workbook(tmp_path, FULL_HEADERS, [])
     monkeypatch.setattr(writer, "xw", FakeXw(app))
