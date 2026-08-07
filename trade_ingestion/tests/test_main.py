@@ -8,6 +8,7 @@ import pytest
 import main
 from trade_ingestion.matcher import MatchResult
 from trade_ingestion.models import CanonicalTrade, RawEvent
+from trade_ingestion.writer import WriteResult
 
 
 def test_run_pipeline_uses_broker_adapter_and_writer(monkeypatch: Any, tmp_path: Path) -> None:
@@ -66,15 +67,15 @@ def test_run_pipeline_uses_broker_adapter_and_writer(monkeypatch: Any, tmp_path:
         captured["events"] = input_events
         return MatchResult(trades=trades, skipped_duplicates=0, open_positions=1)
 
-    def fake_write_trades(path: Path, sheet_name: str, input_trades: list[CanonicalTrade]) -> int:
+    def fake_write_trades(path: Path, sheet_name: str, input_trades: list[CanonicalTrade]) -> Any:
         captured["write_path"] = path
         captured["sheet_name"] = sheet_name
         captured["trades"] = input_trades
-        return len(input_trades)
+        return WriteResult(rows_written=len(input_trades), failed_conversions=[])
 
     monkeypatch.setitem(main.ADAPTERS, "fake", fake_adapter)
     monkeypatch.setattr(main, "match_trades_with_summary", fake_match_trades)
-    monkeypatch.setattr(main, "write_trades", fake_write_trades)
+    monkeypatch.setattr(main, "write_trades_detailed", fake_write_trades)
 
     result = main.run_pipeline(
         broker="fake", csv_path=csv_path, workbook_path=workbook_path, sheet_name="Trades"
