@@ -166,6 +166,28 @@ def test_main_skips_prompt_when_no_prompt_flag_is_set(
     assert captured["ticker_prompt"] is None
 
 
+def test_main_enables_prompt_when_stdin_is_interactive(
+    monkeypatch: Any, tmp_path: Path
+) -> None:
+    csv_path = tmp_path / "input.csv"
+    workbook_path = tmp_path / "ledger.xlsx"
+    captured: dict[str, Any] = {}
+
+    def fake_run_pipeline(
+        *, broker: str, csv_path: Path, workbook_path: Path, sheet_name: str, ticker_prompt: Any = None
+    ) -> main.PipelineResult:
+        captured["ticker_prompt"] = ticker_prompt
+        return main.PipelineResult(rows_ingested=1, rows_skipped=0, open_positions=1)
+
+    monkeypatch.setattr(main, "run_pipeline", fake_run_pipeline)
+    monkeypatch.setattr(main, "_stdin_is_interactive", lambda: True)
+
+    exit_code = main.main(["fidelity", str(csv_path), "--workbook", str(workbook_path), "--sheet", "Trades"])
+
+    assert exit_code == 0
+    assert captured["ticker_prompt"] is main._prompt_for_replacement_ticker
+
+
 def test_main_reports_conversion_failure_details(monkeypatch: Any, capsys: pytest.CaptureFixture[str], tmp_path: Path) -> None:
     csv_path = tmp_path / "input.csv"
     workbook_path = tmp_path / "ledger.xlsx"
