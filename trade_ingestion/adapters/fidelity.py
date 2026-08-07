@@ -261,7 +261,7 @@ def _resolve_option_symbol(
     def try_resolve(candidate: str) -> tuple[dict[str, object] | None, str | None]:
         try:
             return _normalize_option_symbol(candidate), None
-        except FidelityParseError as exc:
+        except (FidelityParseError, ValueError) as exc:
             return None, str(exc)
 
     def prompt(_input_symbol: str, _context_label: str) -> str | None:
