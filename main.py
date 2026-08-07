@@ -139,9 +139,11 @@ def main(argv: Sequence[str] | None = None) -> int:
         f"left {result.open_positions} {open_label} unmatched"
     )
     if result.symbol_failures:
-        row_label = "row" if len(result.symbol_failures) == 1 else "rows"
+        row_count = len(result.symbol_failures)
+        row_label = "row" if row_count == 1 else "rows"
+        skip_verb = "was" if row_count == 1 else "were"
         print(
-            f"Warning: {len(result.symbol_failures)} {row_label} could not be parsed and were "
+            f"Warning: {row_count} {row_label} could not be parsed and {skip_verb} "
             "skipped due to an unsupported option symbol format."
         )
     for symbol_failure in result.symbol_failures:
