@@ -264,7 +264,7 @@ def test_write_trades_inserts_below_last_populated_row(
 
     assert written == 1
     assert table.DataBodyRange.Value[0] == existing_row
-    assert table.DataBodyRange.Value[1][0] == "SPY"
+    assert table.DataBodyRange.Value[1].get(1) == "SPY"
     assert table.DataBodyRange.Value[2:] == [blank_row, blank_row]
 
 
