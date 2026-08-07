@@ -268,6 +268,30 @@ def test_write_trades_inserts_below_last_populated_row(
     assert table.DataBodyRange.Value[2:] == [blank_row, blank_row]
 
 
+def test_write_trades_ignores_formula_only_trailing_rows(
+    monkeypatch: Any, tmp_path: Path
+) -> None:
+    workbook_path = tmp_path / "ledger.xlsx"
+    workbook_path.write_text("placeholder", encoding="utf-8")
+
+    headers = ["Stock", "Open Date", "B/S", "C", "Status"]
+    existing_row = ["AAPL", date(2024, 1, 1), "B", 1.0, "Open"]
+    formula_only_row = [None, None, None, None, ""]
+    table = FakeTable(headers, [existing_row, formula_only_row.copy()])
+    app = FakeApp([])
+    book = FakeBook(str(workbook_path.resolve()), table, app)
+    app.books.append(book)
+
+    monkeypatch.setattr(writer, "xw", FakeXw(app))
+
+    written = writer.write_trades(workbook_path, SHEET_NAME, [_trade()])
+
+    assert written == 1
+    assert table.DataBodyRange.Value[0] == existing_row
+    assert table.DataBodyRange.Value[1].get(1) == "SPY"
+    assert table.DataBodyRange.Value[2] == formula_only_row
+
+
 def test_write_trades_preserves_order_above_trailing_blank_rows(
     monkeypatch: Any, tmp_path: Path
 ) -> None:

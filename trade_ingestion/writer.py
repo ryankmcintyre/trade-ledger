@@ -114,7 +114,7 @@ def write_trades(workbook_path: Path, sheet_name: str, trades: list[CanonicalTra
             if key not in existing_keys:
                 pending.append(trade)
 
-        insertion_position = _last_populated_row_position(table, len(headers)) + 1
+        insertion_position = _last_populated_row_position(table, headers) + 1
         for trade in pending:
             row = _call_with_com_retry(
                 lambda insertion_position=insertion_position: table.ListRows.Add(
