@@ -174,17 +174,30 @@ def _resolve_stock(underlying: str) -> str:
 
 
 def _resolve_trade_status(effect: str | None, *, is_open: bool) -> str:
-    normalized = (effect or "").strip().lower()
-    if normalized.startswith("assign"):
+    normalized = (effect or "").strip().upper()
+
+    if normalized in {"ASSIGNED", "ASSIGN", "ASSIGNMENT"}:
         return STATUS_ASSIGNED
-    if normalized.startswith("exercise"):
+    if normalized in {"EXERCISED", "EXERCISE", "EXERCISENOTICE", "EXERCISE_NOTICE"}:
         return STATUS_EXERCISED
-    if normalized.startswith("expire"):
+    if normalized in {"EXPIRED", "EXPIRE", "EXPIRATION", "EXPIRATIONNOTICE", "EXPIRATION_NOTICE"}:
         return STATUS_EXPIRED
-    if normalized.startswith("open"):
+    if normalized in {"OPEN", "OPENING", "BUY", "BUY_TO_OPEN"}:
         return STATUS_OPEN
-    if normalized.startswith("close"):
+    if normalized in {"CLOSE", "CLOSING", "SELL", "SELL_TO_CLOSE"}:
         return STATUS_CLOSED
+
+    if normalized.startswith("ASSIGN"):
+        return STATUS_ASSIGNED
+    if normalized.startswith("EXERCISE"):
+        return STATUS_EXERCISED
+    if normalized.startswith("EXPIRE"):
+        return STATUS_EXPIRED
+    if normalized.startswith("OPEN"):
+        return STATUS_OPEN
+    if normalized.startswith("CLOSE"):
+        return STATUS_CLOSED
+
     return STATUS_OPEN if is_open else STATUS_CLOSED
 
 

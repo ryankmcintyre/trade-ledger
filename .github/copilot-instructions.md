@@ -60,6 +60,7 @@ class CanonicalTrade:
     exit_price: float | None  # None for open positions
     close_date: date | None   # None for open positions
     account: str              # broker name + account identifier
+    status: str | None        # lifecycle state written to the workbook (e.g. Open, Closed)
 ```
 
 **One row per lot.** Adding to a position on the same day produces multiple `CanonicalTrade` rows,
@@ -104,7 +105,8 @@ each with their own `lot_id`. Never merge or average same-day adds.
 - Reads existing `lot_id` column to build the dedup set passed to the matcher
 - Appends new rows in correct column order
 - Never writes to formula-driven columns: `current_stock_price`, `break_even_price`, `dte`,
-  `profit_loss`, `days_held`, `return_on_capital`, `status`
+  `profit_loss`, `days_held`, `return_on_capital`
+- Writes `status` as a regular data field in the workbook when a value is available
 - Does not close the workbook if it was already open when the script started — check xlwings app state
 - Entry point: `write_trades(workbook_path: Path, sheet_name: str, trades: list[CanonicalTrade]) -> int`
   returns count of rows written
