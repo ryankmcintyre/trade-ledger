@@ -8,9 +8,7 @@ from typing import Callable, Sequence
 
 from trade_ingestion.adapters import parse_fidelity_csv_detailed
 from trade_ingestion.matcher import match_trades_with_summary
-from trade_ingestion.models import CanonicalTrade
-from trade_ingestion.adapters.fidelity import FidelityParseResult
-from trade_ingestion.retry import ResolutionFailure
+from trade_ingestion.models import CanonicalTrade, FidelityParseResult, ResolutionFailure
 from trade_ingestion.writer import ConversionFailure, write_trades_detailed
 
 Adapter = Callable[[str, "Callable[[str, str], str | None] | None"], FidelityParseResult]

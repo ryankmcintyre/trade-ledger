@@ -3,13 +3,12 @@ from __future__ import annotations
 import csv
 import io
 import re
-from dataclasses import dataclass, field
 from datetime import date, datetime
 from typing import Callable
 
 from constants import FIDELITY_BROKER_NAME
-from trade_ingestion.models import RawEvent, make_fallback_lot_id
-from trade_ingestion.retry import ResolutionFailure, resolve_with_retry
+from trade_ingestion.models import FidelityParseResult, RawEvent, ResolutionFailure, make_fallback_lot_id
+from trade_ingestion.retry import resolve_with_retry
 
 DATE_FORMATS = ("%Y-%m-%d", "%m/%d/%Y", "%m/%d/%y", "%b-%d-%Y")
 OPTION_SYMBOL_RE = re.compile(
@@ -52,17 +51,6 @@ HEADER_SYMBOL_ALIASES = set(FIELD_ALIASES["symbol"])
 
 class FidelityParseError(ValueError):
     pass
-
-
-@dataclass(slots=True)
-class FidelityParseResult:
-    """Outcome of a parse_fidelity_csv_detailed run."""
-
-    events: list[RawEvent]
-    # Rows whose option symbol could not be parsed, even after a single
-    # prompt-and-retry attempt with an operator-supplied replacement ticker.
-    # These rows are skipped rather than aborting the whole import.
-    symbol_failures: list[ResolutionFailure] = field(default_factory=list)
 
 
 # NOTE: Fidelity transaction exports are expected to include a transaction identifier.

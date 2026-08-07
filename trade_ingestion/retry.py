@@ -9,8 +9,9 @@ each caller hand-rolling its own retry loop.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
-from typing import Callable, Generic, TypeVar
+from typing import Callable, TypeVar
+
+from trade_ingestion.models import ResolutionFailure
 
 T = TypeVar("T")
 
@@ -21,17 +22,6 @@ Resolver = Callable[[str], "tuple[T | None, str | None]"]
 # and a human-readable label identifying the record being resolved. Returning
 # None (or an empty/whitespace string) means "no replacement, give up".
 Prompt = Callable[[str, str], "str | None"]
-
-
-@dataclass(slots=True)
-class ResolutionFailure(Generic[T]):
-    """Details about a resolution that could not be completed, even after a
-    single prompt-and-retry attempt."""
-
-    context_label: str
-    input_value: str
-    attempted_value: str | None
-    error: str
 
 
 def resolve_with_retry(

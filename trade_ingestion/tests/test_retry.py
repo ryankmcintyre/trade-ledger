@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from trade_ingestion.retry import ResolutionFailure, resolve_with_retry
+from trade_ingestion.models import ResolutionFailure
+from trade_ingestion.retry import resolve_with_retry
 
 
 def test_resolve_with_retry_succeeds_on_first_try() -> None:

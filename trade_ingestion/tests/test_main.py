@@ -6,10 +6,8 @@ from typing import Any
 import pytest
 
 import main
-from trade_ingestion.adapters.fidelity import FidelityParseResult
 from trade_ingestion.matcher import MatchResult
-from trade_ingestion.models import CanonicalTrade, RawEvent
-from trade_ingestion.retry import ResolutionFailure
+from trade_ingestion.models import CanonicalTrade, FidelityParseResult, RawEvent, ResolutionFailure
 from trade_ingestion.writer import ConversionFailure, WriteResult
 
 
