@@ -24,6 +24,7 @@ class CanonicalTrade:
     close_date: date | None
     account: str
     stock: str  # Display value for Column A (ticker or display name from UNDERLYING_DISPLAY_MAP)
+    status: str | None = None
 
     def __post_init__(self) -> None:
         if not self.trade_id:

@@ -50,6 +50,7 @@ def test_match_trades_full_close() -> None:
     assert trade.close_date == date(2024, 1, 3)
     assert trade.fees == pytest.approx(0.3)
     assert trade.stock == "SPY"
+    assert trade.status == "Closed"
 
 
 def test_match_trades_partial_close_produces_matched_and_open_rows() -> None:
@@ -71,6 +72,8 @@ def test_match_trades_partial_close_produces_matched_and_open_rows() -> None:
     assert remaining.quantity == 1.0
     assert remaining.fees == pytest.approx(0.1)
     assert remaining.exit_price is None
+    assert matched.status == "Closed"
+    assert remaining.status == "Open"
 
 
 def test_match_trades_returns_unmatched_open_position() -> None:
@@ -83,6 +86,18 @@ def test_match_trades_returns_unmatched_open_position() -> None:
     assert trade.close_date is None
     assert trade.exit_price is None
     assert trade.quantity == 1.0
+    assert trade.status == "Open"
+
+
+@pytest.mark.parametrize(
+    ("effect", "expected_status"),
+    [("CLOSE", "Closed"), ("OPEN", "Open"), ("ASSIGNED", "Assigned"), ("EXERCISED", "Exercised"), ("EXPIRED", "Expired")],
+)
+def test_match_trades_derives_status_from_effect(effect: str, expected_status: str) -> None:
+    trades = match_trades([_event(lot_id="close-1", trade_date=date(2024, 1, 3), effect=effect, quantity=1.0, premium=3.0, fees=0.2)])
+
+    assert len(trades) == 1
+    assert trades[0].status == expected_status
 
 
 def test_match_trades_orphan_close_creates_close_only_row() -> None:

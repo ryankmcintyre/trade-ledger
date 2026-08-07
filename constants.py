@@ -17,6 +17,7 @@ FIELD_TO_COLUMN: dict[str, str] = {
     "exit_price": "Exit Price",
     "close_date": "Close Date",
     "account": "Account",
+    "status": "Status",
 }
 
 # Columns used to form the composite dedup key when reading existing rows.
