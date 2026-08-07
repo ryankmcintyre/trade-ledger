@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import argparse
-import inspect
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Sequence
@@ -42,15 +41,17 @@ def run_pipeline(
     csv_content = csv_path.read_text(encoding="utf-8-sig")
     events = adapter(csv_content)
     match_result = match_trades_with_summary(events)
-    write_kwargs: dict[str, object] = {}
-    if "ticker_prompt" in inspect.signature(write_trades_detailed).parameters:
-        write_kwargs["ticker_prompt"] = ticker_prompt
-    write_result = write_trades_detailed(
-        workbook_path,
-        sheet_name,
-        match_result.trades,
-        **write_kwargs,
-    )
+    try:
+        write_result = write_trades_detailed(
+            workbook_path,
+            sheet_name,
+            match_result.trades,
+            ticker_prompt=ticker_prompt,
+        )
+    except TypeError as exc:
+        if "unexpected keyword argument 'ticker_prompt'" not in str(exc):
+            raise
+        write_result = write_trades_detailed(workbook_path, sheet_name, match_result.trades)
     written = write_result.rows_written
     # The writer deduplicates against existing rows using composite keys.
     skipped = len(match_result.trades) - written
@@ -96,15 +97,23 @@ def _prompt_for_replacement_ticker(input_ticker: str, trade: CanonicalTrade) -> 
 
 def main(argv: Sequence[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
-    pipeline_kwargs: dict[str, object] = {
-        "broker": args.broker,
-        "csv_path": args.csv_path,
-        "workbook_path": args.workbook,
-        "sheet_name": args.sheet,
-    }
-    if "ticker_prompt" in inspect.signature(run_pipeline).parameters:
-        pipeline_kwargs["ticker_prompt"] = _prompt_for_replacement_ticker
-    result = run_pipeline(**pipeline_kwargs)
+    try:
+        result = run_pipeline(
+            broker=args.broker,
+            csv_path=args.csv_path,
+            workbook_path=args.workbook,
+            sheet_name=args.sheet,
+            ticker_prompt=_prompt_for_replacement_ticker,
+        )
+    except TypeError as exc:
+        if "unexpected keyword argument 'ticker_prompt'" not in str(exc):
+            raise
+        result = run_pipeline(
+            broker=args.broker,
+            csv_path=args.csv_path,
+            workbook_path=args.workbook,
+            sheet_name=args.sheet,
+        )
     open_label = "open position" if result.open_positions == 1 else "open positions"
     print(
         f"Ingested {result.rows_ingested} trade rows to {args.workbook} [{args.sheet}]; "
