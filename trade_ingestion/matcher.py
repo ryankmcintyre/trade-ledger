@@ -167,6 +167,8 @@ def _event_sort_key(event: RawEvent) -> tuple[object, int, str]:
 
 def _matching_open_lot_keys(event: RawEvent) -> tuple[tuple[str, str, str], ...]:
     if event.effect in {"ASSIGNED", "EXERCISED", "EXPIRED"} or event.side in {None, ""}:
+        # TODO: Lifecycle events do not carry side information, so we try the long open-lot queue
+        # TODO: before the short queue as a conservative default until broker data disambiguates it.
         return (
             (event.account, event.symbol, "B"),
             (event.account, event.symbol, "S"),
