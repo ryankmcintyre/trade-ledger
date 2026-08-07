@@ -65,11 +65,23 @@ class FakeRowRange:
 
 
 class FakeListRow:
-    def __init__(self, table: "FakeTable") -> None:
-        existing_count = len(table.DataBodyRange.Value or [])
-        row_number = existing_count + len(table.added_rows) + 2
+    def __init__(self, table: "FakeTable", position: int) -> None:
+        rows = table.DataBodyRange.Value
+        if rows is None:
+            rows = []
+            table.DataBodyRange.Value = rows
+        if position < 1 or position > len(rows) + 1:
+            raise ValueError(f"Invalid ListRow position: {position}")
+
+        row_number = position + 1
         self.Range = FakeRowRange(table, row_number)
+        rows.insert(position - 1, self.Range.values)
         table.added_rows.append(self.Range.values)
+        for existing_row_number in sorted(table.rows_by_number, reverse=True):
+            if existing_row_number >= row_number:
+                existing_row = table.rows_by_number.pop(existing_row_number)
+                existing_row.Row = existing_row_number + 1
+                table.rows_by_number[existing_row_number + 1] = existing_row
         table.rows_by_number[row_number] = self.Range
 
 
@@ -77,8 +89,13 @@ class FakeListRows:
     def __init__(self, table: "FakeTable") -> None:
         self.table = table
 
-    def Add(self) -> FakeListRow:
-        return FakeListRow(self.table)
+    @property
+    def Count(self) -> int:
+        return len(self.table.DataBodyRange.Value or [])
+
+    def Add(self, Position: int | None = None) -> FakeListRow:
+        position = Position if Position is not None else self.Count + 1
+        return FakeListRow(self.table, position)
 
 
 class FakeRange:
@@ -155,7 +172,12 @@ class FakeXw:
         raise AssertionError(f"Unexpected App() call for already-open workbook: {args} {kwargs}")
 
 
-def _trade(stock: str = "SPY", open_date: date | None = date(2024, 1, 2), quantity: float = 1.0, side: str = "B") -> CanonicalTrade:
+def _trade(
+    stock: str = "SPY",
+    open_date: date | None = date(2024, 1, 2),
+    quantity: float = 1.0,
+    side: str = "B",
+) -> CanonicalTrade:
     return CanonicalTrade(
         lot_id="lot-1",
         trade_id="",
@@ -220,6 +242,77 @@ def test_write_trades_uses_column_mapping(monkeypatch: Any, tmp_path: Path) -> N
     assert 8 not in row  # DTE
     assert 9 not in row  # Current Stock Price
     assert 10 not in row  # Break Even Price
+
+
+def test_write_trades_inserts_below_last_populated_row(
+    monkeypatch: Any, tmp_path: Path
+) -> None:
+    workbook_path = tmp_path / "ledger.xlsx"
+    workbook_path.write_text("placeholder", encoding="utf-8")
+
+    headers = ["Stock", "Open Date", "B/S", "C"]
+    existing_row = ["AAPL", date(2024, 1, 1), "B", 1.0]
+    blank_row = [None, None, None, None]
+    table = FakeTable(headers, [existing_row, blank_row.copy(), blank_row.copy()])
+    app = FakeApp([])
+    book = FakeBook(str(workbook_path.resolve()), table, app)
+    app.books.append(book)
+
+    monkeypatch.setattr(writer, "xw", FakeXw(app))
+
+    written = writer.write_trades(workbook_path, SHEET_NAME, [_trade()])
+
+    assert written == 1
+    assert table.DataBodyRange.Value[0] == existing_row
+    assert table.DataBodyRange.Value[1][0] == "SPY"
+    assert table.DataBodyRange.Value[2:] == [blank_row, blank_row]
+
+
+def test_write_trades_preserves_order_above_trailing_blank_rows(
+    monkeypatch: Any, tmp_path: Path
+) -> None:
+    workbook_path = tmp_path / "ledger.xlsx"
+    workbook_path.write_text("placeholder", encoding="utf-8")
+
+    headers = ["Stock", "Open Date", "B/S", "C"]
+    existing_row = ["AAPL", date(2024, 1, 1), "B", 1.0]
+    blank_row = [None, None, None, None]
+    table = FakeTable(headers, [existing_row, blank_row.copy()])
+    app = FakeApp([])
+    book = FakeBook(str(workbook_path.resolve()), table, app)
+    app.books.append(book)
+
+    monkeypatch.setattr(writer, "xw", FakeXw(app))
+
+    trades = [_trade(stock="SPY"), _trade(stock="QQQ", quantity=2.0)]
+    written = writer.write_trades(workbook_path, SHEET_NAME, trades)
+
+    assert written == 2
+    assert table.DataBodyRange.Value[0] == existing_row
+    assert [row.get(1) for row in table.DataBodyRange.Value[1:3]] == ["SPY", "QQQ"]
+    assert table.DataBodyRange.Value[3] == blank_row
+
+
+def test_write_trades_inserts_at_start_of_blank_table(
+    monkeypatch: Any, tmp_path: Path
+) -> None:
+    workbook_path = tmp_path / "ledger.xlsx"
+    workbook_path.write_text("placeholder", encoding="utf-8")
+
+    headers = ["Stock", "Open Date", "B/S", "C"]
+    blank_row = [None, None, None, None]
+    table = FakeTable(headers, [blank_row.copy(), blank_row.copy()])
+    app = FakeApp([])
+    book = FakeBook(str(workbook_path.resolve()), table, app)
+    app.books.append(book)
+
+    monkeypatch.setattr(writer, "xw", FakeXw(app))
+
+    written = writer.write_trades(workbook_path, SHEET_NAME, [_trade()])
+
+    assert written == 1
+    assert table.DataBodyRange.Value[0][1] == "SPY"
+    assert table.DataBodyRange.Value[1:] == [blank_row, blank_row]
 
 
 def test_write_trades_dedup_by_composite_key(monkeypatch: Any, tmp_path: Path) -> None:

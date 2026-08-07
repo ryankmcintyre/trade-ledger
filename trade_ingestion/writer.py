@@ -114,8 +114,13 @@ def write_trades(workbook_path: Path, sheet_name: str, trades: list[CanonicalTra
             if key not in existing_keys:
                 pending.append(trade)
 
+        insertion_position = _last_populated_row_position(table, len(headers)) + 1
         for trade in pending:
-            row = _call_with_com_retry(lambda: table.ListRows.Add())
+            row = _call_with_com_retry(
+                lambda insertion_position=insertion_position: table.ListRows.Add(
+                    Position=insertion_position
+                )
+            )
             base_row = _call_with_com_retry(lambda: row.Range.Row)
             base_column = _call_with_com_retry(lambda: row.Range.Column)
             for field_name, col_name in FIELD_TO_COLUMN.items():
@@ -135,6 +140,7 @@ def write_trades(workbook_path: Path, sheet_name: str, trades: list[CanonicalTra
                     sheet.range((base_row, base_column + cell_index - 1)).value = value
 
                 _call_with_com_retry(_write_cell)
+            insertion_position += 1
 
         _call_with_com_retry(workbook.save)
         return len(pending)
@@ -303,3 +309,17 @@ def _normalize_table_rows(raw_value: Any, width: int) -> list[list[Any]]:
             return [list(raw_value)]
         return [list(row) for row in raw_value]
     return [[raw_value] + [None] * (width - 1)]
+
+
+def _last_populated_row_position(table: Any, width: int) -> int:
+    """Return the one-based position of the table's last non-empty data row."""
+    data_range = getattr(table, "DataBodyRange", None)
+    if data_range is None or data_range.Value in (None, ""):
+        return 0
+
+    rows = _normalize_table_rows(data_range.Value, width)
+    for position in range(len(rows), 0, -1):
+        row = rows[position - 1]
+        if any(value not in (None, "") for value in row):
+            return position
+    return 0
