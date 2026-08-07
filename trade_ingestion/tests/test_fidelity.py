@@ -2,7 +2,7 @@ from datetime import date
 
 import pytest
 
-from trade_ingestion.adapters.fidelity import parse_fidelity_csv, parse_fidelity_csv_detailed
+from trade_ingestion.adapters.fidelity import parse_fidelity_csv_detailed
 
 
 def test_parse_fidelity_csv_accepts_abbreviated_month_date() -> None:
@@ -10,7 +10,7 @@ def test_parse_fidelity_csv_accepts_abbreviated_month_date() -> None:
 Aug-3-2026,Buy,AAPL,100,180.50,1.00,IRA-1,EQ-BUY,Equity
 """
 
-    events = parse_fidelity_csv(content)
+    events = parse_fidelity_csv_detailed(content).events
 
     assert events[0].trade_date == date(2026, 8, 3)
 
@@ -26,7 +26,7 @@ Trade Date,Action,Symbol,Quantity,Price,Commission,Fees,Account,Transaction ID,S
 2024-01-06,Dividend,AAPL,0,0,0,0,IRA-1,DIV-1,Cash,0
 """
 
-    events = parse_fidelity_csv(content)
+    events = parse_fidelity_csv_detailed(content).events
 
     assert len(events) == 4
 
@@ -83,7 +83,7 @@ def test_parse_fidelity_csv_real_world_column_names_and_verbose_actions() -> Non
         "-105.96,,\n"
     )
 
-    events = parse_fidelity_csv(content)
+    events = parse_fidelity_csv_detailed(content).events
 
     # Non-trade row (MARK TO MARKET) must be excluded
     assert len(events) == 6
@@ -143,7 +143,7 @@ def test_parse_fidelity_csv_compact_option_symbol_small_strike() -> None:
         "05/27/2026\n"
     )
 
-    events = parse_fidelity_csv(content)
+    events = parse_fidelity_csv_detailed(content).events
 
     assert len(events) == 1
     event = events[0]
@@ -166,7 +166,7 @@ def test_parse_fidelity_csv_accepts_compact_option_symbol_without_leading_dash()
         "-215,,08/08/2026\n"
     )
 
-    events = parse_fidelity_csv(content)
+    events = parse_fidelity_csv_detailed(content).events
 
     assert len(events) == 1
     event = events[0]
@@ -184,7 +184,7 @@ def test_parse_fidelity_csv_treats_dashed_commission_as_zero() -> None:
     2024-01-02,Buy,AAPL,100,180.50,--,IRA-1,EQ-BUY,Equity
     """
 
-    events = parse_fidelity_csv(content)
+    events = parse_fidelity_csv_detailed(content).events
 
     assert len(events) == 1
     assert events[0].fees == 0.0
@@ -202,7 +202,7 @@ Trade Date,Action,Symbol,Quantity,Price,Commission,Fees,Account,Transaction ID,S
 2024-01-06,Dividend,AAPL,0,0,0,0,IRA-1,DIV-1,Cash,0
 """
 
-    events = parse_fidelity_csv(content)
+    events = parse_fidelity_csv_detailed(content).events
 
     assert len(events) == 4
 
@@ -231,7 +231,7 @@ def test_parse_fidelity_csv_accepts_activity_description_action_alias() -> None:
 2024-01-03,Sell,AAPL,100,181.75,1.00,IRA-1,EQ-SELL,Equity
 """
 
-    events = parse_fidelity_csv(content)
+    events = parse_fidelity_csv_detailed(content).events
 
     assert len(events) == 2
     assert events[0].effect == "OPEN"
@@ -247,7 +247,7 @@ def test_parse_fidelity_csv_emits_lifecycle_effects_for_assigned_exercised_and_e
    2024-01-04,Expired,SPY 01/19/2024 450 C,1,0.00,0.65,IRA-1,EXPIRE-1,Option
    """
 
-   events = parse_fidelity_csv(content)
+   events = parse_fidelity_csv_detailed(content).events
 
    assert len(events) == 3
    assert [event.effect for event in events] == ["ASSIGNED", "EXERCISED", "EXPIRED"]
@@ -331,13 +331,13 @@ def test_parse_fidelity_csv_detailed_records_failure_when_retry_ticker_still_unp
 
 def test_parse_fidelity_csv_still_raises_for_missing_header() -> None:
     with pytest.raises(Exception):
-        parse_fidelity_csv("not,a,valid,header\n1,2,3,4\n")
+        parse_fidelity_csv_detailed("not,a,valid,header\n1,2,3,4\n")
 
 
-def test_parse_fidelity_csv_backward_compatible_wrapper_skips_unresolvable_rows() -> None:
+def test_parse_fidelity_csv_detailed_skips_unresolvable_rows_and_continues() -> None:
     content = _renamed_ticker_csv()
 
-    events = parse_fidelity_csv(content)
+    events = parse_fidelity_csv_detailed(content).events
 
     assert len(events) == 1
     assert events[0].symbol == "AAPL"

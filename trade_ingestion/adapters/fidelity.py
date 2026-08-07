@@ -56,15 +56,6 @@ class FidelityParseError(ValueError):
 # NOTE: Fidelity transaction exports are expected to include a transaction identifier.
 # NOTE: When that identifier is missing, this adapter falls back to a deterministic hash
 # NOTE: of trade_date + symbol + quantity + premium, per the pipeline requirements.
-def parse_fidelity_csv(
-    content: str,
-    symbol_prompt: Callable[[str, str], str | None] | None = None,
-) -> list[RawEvent]:
-    """Parse a Fidelity export into RawEvents. Thin wrapper over
-    parse_fidelity_csv_detailed for callers that don't need failure details."""
-    return parse_fidelity_csv_detailed(content, symbol_prompt).events
-
-
 def parse_fidelity_csv_detailed(
     content: str,
     symbol_prompt: Callable[[str, str], str | None] | None = None,
