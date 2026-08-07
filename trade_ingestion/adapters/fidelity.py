@@ -266,7 +266,7 @@ def _resolve_option_symbol(
 
     def prompt(_input_symbol: str, _context_label: str) -> str | None:
         replacement_ticker = symbol_prompt(symbol_text, context_label)  # type: ignore[misc]
-        if not replacement_ticker:
+        if not replacement_ticker or not replacement_ticker.strip():
             return None
         return _reconstruct_compact_symbol(symbol_text, replacement_ticker)
 
