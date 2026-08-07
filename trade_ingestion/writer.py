@@ -1,13 +1,97 @@
 from __future__ import annotations
 
+import time
 from datetime import date
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable, TypeVar
 
 import xlwings as xw
 
 from constants import DEDUP_COLUMNS, FIELD_TO_COLUMN, TABLE_NAME
 from trade_ingestion.models import CanonicalTrade
+
+try:  # pragma: no cover - pywin32 is only importable on Windows
+    import pythoncom
+    import pywintypes
+except ImportError:  # pragma: no cover - non-Windows/test environments
+    pythoncom = None
+    pywintypes = None
+
+# RPC_E_CALL_REJECTED: Excel's COM server was busy (e.g. still finishing an
+# open/save, showing a dialog, or recalculating) and rejected the call.
+# RPC_E_SERVERCALL_RETRYLATER: the server explicitly asked the caller to retry.
+# Both are transient — retrying (after pumping the message queue) resolves them.
+_RETRYABLE_HRESULTS = frozenset({-2147418111, -2147417846})
+
+# TODO: retry attempt count / backoff are conservative defaults; the issue
+# does not specify exact timing requirements, so these are tunable if real
+# workbooks need longer waits (e.g. very large tables/pivot recalculation).
+_COM_RETRY_ATTEMPTS = 5
+_COM_RETRY_BASE_DELAY = 0.2
+
+T = TypeVar("T")
+
+
+class ComRetryExhaustedError(RuntimeError):
+    """Raised when a COM call keeps failing with a transient/busy error
+    even after all retry attempts have been exhausted."""
+
+
+def _is_retryable_com_error(exc: BaseException) -> bool:
+    """Return True if `exc` looks like a transient COM busy/rejected-call error.
+
+    Excel occasionally rejects COM calls (RPC_E_CALL_REJECTED /
+    RPC_E_SERVERCALL_RETRYLATER) while it is busy. When that happens mid
+    enumeration (e.g. iterating `workbook.sheets`), the generated win32com
+    wrapper's `__iter__` swallows the real `com_error` and raises a secondary,
+    misleading `TypeError: This object does not support enumeration` instead.
+    We treat both shapes as retryable.
+    """
+    if pywintypes is not None and isinstance(exc, pywintypes.com_error):
+        hresult = exc.args[0] if exc.args else None
+        return hresult in _RETRYABLE_HRESULTS
+    if isinstance(exc, TypeError) and "does not support enumeration" in str(exc):
+        return True
+    return False
+
+
+def _call_with_com_retry(
+    func: Callable[[], T],
+    *,
+    attempts: int = _COM_RETRY_ATTEMPTS,
+    base_delay: float = _COM_RETRY_BASE_DELAY,
+) -> T:
+    """Call `func`, retrying on transient COM busy/rejected-call errors.
+
+    Between attempts we pump Excel's pending Windows message queue (this is
+    what actually clears RPC_E_CALL_REJECTED) and back off briefly before
+    retrying. If every attempt fails, raise a clear ComRetryExhaustedError
+    instead of letting the confusing raw COM/TypeError propagate.
+    """
+    last_error: BaseException | None = None
+    for attempt in range(1, attempts + 1):
+        try:
+            return func()
+        except Exception as exc:  # noqa: BLE001 - re-raised below if not retryable
+            if not _is_retryable_com_error(exc):
+                raise
+            last_error = exc
+            if attempt < attempts:
+                if pythoncom is not None:
+                    try:
+                        pythoncom.PumpWaitingMessages()
+                    except Exception:  # noqa: BLE001 - pumping is best-effort
+                        # If pumping fails (e.g. COM not initialized on this
+                        # thread) we still want to keep retrying rather than
+                        # abort the whole retry loop.
+                        pass
+                time.sleep(base_delay * attempt)
+    raise ComRetryExhaustedError(
+        "Excel COM server was busy/unresponsive and rejected the call after "
+        f"{attempts} retries. The workbook may be showing a dialog, "
+        "recalculating, or otherwise blocked. Original error: "
+        f"{last_error!r}"
+    ) from last_error
 
 
 def write_trades(workbook_path: Path, sheet_name: str, trades: list[CanonicalTrade]) -> int:
@@ -30,16 +114,21 @@ def write_trades(workbook_path: Path, sheet_name: str, trades: list[CanonicalTra
                 pending.append(trade)
 
         for trade in pending:
-            row = table.ListRows.Add()
+            row = _call_with_com_retry(lambda: table.ListRows.Add())
             for field_name, col_name in FIELD_TO_COLUMN.items():
                 if col_name not in header_positions:
                     continue
                 value = getattr(trade, field_name, None)
                 if value is None:
                     continue
-                row.Range.Cells(1, header_positions[col_name]).Value = value
+                cell_index = header_positions[col_name]
 
-        workbook.save()
+                def _write_cell(row: Any = row, cell_index: int = cell_index, value: Any = value) -> None:
+                    row.Range.Cells(1, cell_index).Value = value
+
+                _call_with_com_retry(_write_cell)
+
+        _call_with_com_retry(workbook.save)
         return len(pending)
     finally:
         if not was_open:
@@ -128,12 +217,21 @@ def _excel_serial_to_date(serial: float) -> date | None:
 
 def _open_workbook(workbook_path: Path) -> tuple[Any, Any, bool]:
     resolved_path = str(workbook_path.resolve())
-    existing_book = _find_open_book(resolved_path)
+    existing_book = _call_with_com_retry(lambda: _find_open_book(resolved_path))
     if existing_book is not None:
         return existing_book, existing_book.app, True
 
     app = xw.App(visible=False, add_book=False)
-    workbook = app.books.open(resolved_path)
+    # Reduce the chance Excel blocks on a dialog (e.g. file-format prompts,
+    # "keep changes") which is a common trigger for RPC_E_CALL_REJECTED.
+    # Only touch these settings on an app we created ourselves — never on
+    # the user's own already-open Excel session (see was_open branch above).
+    try:
+        app.display_alerts = False
+        app.screen_updating = False
+    except Exception:  # noqa: BLE001 - best-effort, not critical to success
+        pass
+    workbook = _call_with_com_retry(lambda: app.books.open(resolved_path))
     return workbook, app, False
 
 
@@ -149,7 +247,11 @@ def _find_open_book(resolved_path: str) -> Any | None:
 def _find_table(workbook: Any, sheet_name: str, table_name: str) -> Any:
     sheet = _find_sheet(workbook, sheet_name)
     try:
-        return sheet.api.ListObjects(table_name)
+        return _call_with_com_retry(lambda: sheet.api.ListObjects(table_name))
+    except ComRetryExhaustedError:
+        # Exhausted retries on a transient COM error — surface that clearly
+        # rather than masking it as "table not found".
+        raise
     except Exception as exc:
         raise ValueError(
             f"Could not find table {table_name!r} on worksheet {sheet_name!r}"
@@ -157,16 +259,19 @@ def _find_table(workbook: Any, sheet_name: str, table_name: str) -> Any:
 
 
 def _find_sheet(workbook: Any, sheet_name: str) -> Any:
-    available: list[str] = []
-    for sheet in workbook.sheets:
-        name = str(sheet.name)
-        available.append(name)
-        if name.casefold() == sheet_name.casefold():
-            return sheet
-    known = ", ".join(repr(name) for name in available) or "none"
-    raise ValueError(
-        f"Could not find worksheet {sheet_name!r} in the workbook. Available worksheets: {known}"
-    )
+    def _search() -> Any:
+        available: list[str] = []
+        for sheet in workbook.sheets:
+            name = str(sheet.name)
+            available.append(name)
+            if name.casefold() == sheet_name.casefold():
+                return sheet
+        known = ", ".join(repr(name) for name in available) or "none"
+        raise ValueError(
+            f"Could not find worksheet {sheet_name!r} in the workbook. Available worksheets: {known}"
+        )
+
+    return _call_with_com_retry(_search)
 
 
 def _table_headers(table: Any) -> list[str]:
