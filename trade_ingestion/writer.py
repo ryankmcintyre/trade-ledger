@@ -311,15 +311,28 @@ def _normalize_table_rows(raw_value: Any, width: int) -> list[list[Any]]:
     return [[raw_value] + [None] * (width - 1)]
 
 
-def _last_populated_row_position(table: Any, width: int) -> int:
-    """Return the one-based position of the table's last non-empty data row."""
+def _last_populated_row_position(table: Any, headers: list[str]) -> int:
+    """Return the one-based position of the table's last non-empty data row.
+
+    A row is considered populated if any of the user-entered dedup columns has a value.
+    This avoids treating formula-driven columns as data when trailing rows are otherwise blank.
+    """
     data_range = getattr(table, "DataBodyRange", None)
-    if data_range is None or data_range.Value in (None, ""):
+    if data_range is None:
         return 0
 
-    rows = _normalize_table_rows(data_range.Value, width)
+    value = data_range.Value
+    if value in (None, ""):
+        return 0
+
+    rows = _normalize_table_rows(value, len(headers))
+    indices = [headers.index(col) for col in DEDUP_COLUMNS if col in headers]
+
     for position in range(len(rows), 0, -1):
         row = rows[position - 1]
-        if any(value not in (None, "") for value in row):
+        if indices:
+            if any((row[idx] if idx < len(row) else None) not in (None, "") for idx in indices):
+                return position
+        elif any(cell not in (None, "") for cell in row):
             return position
     return 0
