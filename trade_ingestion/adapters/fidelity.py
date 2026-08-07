@@ -162,6 +162,15 @@ def _map_action(action: str) -> dict[str, str] | None:
     if normalized in _EXACT:
         return _EXACT[normalized]
 
+    # NOTE: Fidelity emits assignment, exercise, and expiration rows as distinct lifecycle events;
+    # NOTE: route them through the matcher with explicit effects so the import can write statuses.
+    if "assigned" in normalized:
+        return {"effect": "ASSIGNED", "side": "S", "instrument": "option"}
+    if "exercised" in normalized:
+        return {"effect": "EXERCISED", "side": "B", "instrument": "option"}
+    if "expired" in normalized:
+        return {"effect": "EXPIRED", "side": "B", "instrument": "option"}
+
     # Verbose Fidelity descriptions: "YOU BOUGHT/SOLD [OPENING/CLOSING TRANSACTION] ..."
     bought = "you bought" in normalized
     sold = "you sold" in normalized
