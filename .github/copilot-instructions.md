@@ -50,7 +50,7 @@ class CanonicalTrade:
     symbol: str               # raw symbol — OCC format for options (e.g. 'SPY 230915C00450000')
     open_date: date
     exp_date: date | None     # options only
-    call_or_put: str | None   # 'C', 'P', or None for equities
+    call_or_put: str | None   # 'Call', 'Put', or None for equities
     side: str                 # 'B' or 'S' for options or 'C' for equities
     strike: float | None      # options only
     stock_price_open: float | None
