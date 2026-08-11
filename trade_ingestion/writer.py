@@ -377,6 +377,8 @@ def _make_dedup_key(trade: CanonicalTrade, headers: list[str]) -> str:
             parts.append(trade.side or "")
         elif col_name == "C":
             parts.append(f"{trade.quantity:g}")
+        elif col_name == "Strike Price":
+            parts.append(f"{trade.strike:g}" if trade.strike is not None else "")
     return "|".join(parts)
 
 
@@ -471,6 +473,17 @@ def _row_matches_trade(
         if row_account not in (None, "") and str(row_account).strip() != str(trade.account or "").strip():
             return False
 
+    strike_index = col_indices.get("Strike Price")
+    if strike_index is not None and strike_index < len(row) and trade.strike is not None:
+        row_strike = row[strike_index]
+        if row_strike not in (None, ""):
+            try:
+                row_strike_value = float(row_strike)
+            except (TypeError, ValueError):
+                return False
+            if abs(row_strike_value - float(trade.strike)) > 1e-9:
+                return False
+
     if trade.open_date is not None:
         open_date_index = headers.index("Open Date") if "Open Date" in headers else None
         if open_date_index is not None and open_date_index < len(row):
@@ -561,7 +574,7 @@ def _existing_dedup_keys(table: Any, headers: list[str]) -> set[str]:
                 # Excel serial date — convert to ISO format for comparison
                 d = _excel_serial_to_date(val)
                 parts.append(d.isoformat() if d else "")
-            elif col_name == "C":
+            elif col_name in ("C", "Strike Price"):
                 parts.append(f"{float(val):g}")
             elif col_name == "Open Date" and hasattr(val, "date") and callable(getattr(val, "date", None)):
                 parts.append(val.date().isoformat())

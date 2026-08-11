@@ -244,9 +244,11 @@ def _trade(
     quantity: float = 1.0,
     side: str = "B",
     underlying: str | None = None,
+    strike: float = 450.0,
+    lot_id: str = "lot-1",
 ) -> CanonicalTrade:
     return CanonicalTrade(
-        lot_id="lot-1",
+        lot_id=lot_id,
         trade_id="",
         underlying=underlying if underlying is not None else stock,
         symbol="SPY 240119C00450000",
@@ -254,7 +256,7 @@ def _trade(
         exp_date=date(2024, 1, 19),
         call_or_put="Call",
         side=side,
-        strike=450.0,
+        strike=strike,
         stock_price_open=470.0,
         premium=2.0,
         quantity=quantity,
@@ -436,6 +438,39 @@ def test_write_trades_dedup_by_composite_key(monkeypatch: Any, tmp_path: Path) -
 
     assert written == 0
     assert len(table.added_rows) == 0
+
+
+def test_write_trades_does_not_dedup_same_day_trades_with_different_strikes(
+    monkeypatch: Any, tmp_path: Path
+) -> None:
+    """Regression test for issue #43: index options (e.g. SPXW/SPX) all resolve to
+    the same "Stock" display name via UNDERLYING_DISPLAY_MAP, so same-day trades on
+    different strikes with the same side/quantity must not collide on the composite
+    dedup key and be incorrectly skipped."""
+    workbook_path = tmp_path / "ledger.xlsx"
+    workbook_path.write_text("placeholder", encoding="utf-8")
+
+    headers = ["Stock", "Stock Symbol", "Open Date", "Exp Date", "Call or Put", "B/S",
+               "Stock Price DOC", "DTE", "Current Stock Price", "Break Even Price",
+               "Strike Price", "Premium", "C", "Collateral", "(Put) Margin Cash Reserve",
+               "(Call) Cost Basis/Share", "Fees", "Exit Price", "Close Date",
+               "Profit/Loss", "Days Held", "Return on Capital",
+               "Annualized ROR for Options", "Margin Annualized ROR",
+               "Status", "Account", "Source"]
+    table = FakeTable(headers, [])
+    app = FakeApp([])
+    book = FakeBook(str(workbook_path.resolve()), table, app)
+    app.books.append(book)
+
+    monkeypatch.setattr(writer, "xw", FakeXw(app))
+
+    trade_a = _trade(stock="S&P 500 INDEX", underlying="SPXW", strike=7740.0, lot_id="lot-7740")
+    trade_b = _trade(stock="S&P 500 INDEX", underlying="SPXW", strike=7725.0, lot_id="lot-7725")
+
+    written = writer.write_trades(workbook_path, TABLE_NAME, [trade_a, trade_b])
+
+    assert written == 2
+    assert len(table.added_rows) == 2
 
 
 def test_write_trades_updates_existing_open_row_for_close_trade(monkeypatch: Any, tmp_path: Path) -> None:

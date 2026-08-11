@@ -23,7 +23,11 @@ FIELD_TO_COLUMN: dict[str, str] = {
 }
 
 # Columns used to form the composite dedup key when reading existing rows.
-DEDUP_COLUMNS: tuple[str, ...] = ("Stock", "Open Date", "B/S", "C")
+# NOTE: "Strike Price" is required here because index options (e.g. SPXW/SPX) all
+# NOTE: resolve to the same "Stock" display name via UNDERLYING_DISPLAY_MAP, so without
+# NOTE: the strike, distinct same-day/same-side/same-quantity trades on different
+# NOTE: strikes would collide on the same composite key and be dropped as duplicates.
+DEDUP_COLUMNS: tuple[str, ...] = ("Stock", "Open Date", "B/S", "C", "Strike Price")
 
 # Formula-driven column holding the ticker resolved from the Column A Stocks entity.
 STOCK_SYMBOL_COLUMN = "Stock Symbol"
