@@ -1,6 +1,6 @@
 from datetime import date
 
-from trade_ingestion.models import CanonicalTrade, make_trade_id
+from trade_ingestion.models import CanonicalTrade, RawEvent, make_trade_id
 
 
 def test_make_trade_id_for_option_trade() -> None:
@@ -11,7 +11,7 @@ def test_make_trade_id_for_option_trade() -> None:
         symbol="SPY 230915C00450000",
         open_date=date(2023, 9, 1),
         exp_date=date(2023, 9, 15),
-        call_or_put="C",
+        call_or_put="Call",
         side="B",
         strike=450.0,
         stock_price_open=449.5,
@@ -50,6 +50,69 @@ def test_make_trade_id_for_equity_trade() -> None:
     )
 
     assert make_trade_id(trade) == "2023-08-01|AAPL|C|1"
+
+
+def test_option_types_are_normalized_to_full_names() -> None:
+    trade = CanonicalTrade(
+        lot_id="lot-5",
+        trade_id="",
+        underlying="SPY",
+        symbol="SPY 230915P00450000",
+        open_date=date(2023, 9, 1),
+        exp_date=date(2023, 9, 15),
+        call_or_put="p",
+        side="B",
+        strike=450.0,
+        stock_price_open=449.5,
+        premium=2.15,
+        quantity=1.0,
+        fees=1.3,
+        exit_price=3.0,
+        close_date=date(2023, 9, 8),
+        account="Fidelity",
+        stock="SPY",
+    )
+    event = RawEvent(
+        lot_id="lot-6",
+        broker="Fidelity",
+        account="Fidelity",
+        underlying="SPY",
+        symbol="SPY 230915C00450000",
+        trade_date=date(2023, 9, 1),
+        exp_date=date(2023, 9, 15),
+        call_or_put="c",
+        side="B",
+        strike=450.0,
+        stock_price=449.5,
+        premium=2.15,
+        quantity=1.0,
+        fees=1.3,
+        effect="OPEN",
+    )
+
+    equity_trade = CanonicalTrade(
+        lot_id="lot-7",
+        trade_id="",
+        underlying="AAPL",
+        symbol="AAPL",
+        open_date=date(2023, 8, 1),
+        exp_date=None,
+        call_or_put=None,
+        side="C",
+        strike=None,
+        stock_price_open=190.5,
+        premium=190.5,
+        quantity=1.0,
+        fees=0.65,
+        exit_price=193.0,
+        close_date=date(2023, 8, 2),
+        account="Fidelity",
+        stock="AAPL",
+    )
+
+    assert trade.call_or_put == "Put"
+    assert event.call_or_put == "Call"
+    assert equity_trade.call_or_put is None
 
 
 def test_make_trade_id_with_optional_fields_missing() -> None:

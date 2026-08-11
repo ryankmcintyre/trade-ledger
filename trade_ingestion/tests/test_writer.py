@@ -251,7 +251,7 @@ def _trade(
         symbol="SPY 240119C00450000",
         open_date=open_date,
         exp_date=date(2024, 1, 19),
-        call_or_put="C",
+        call_or_put="Call",
         side=side,
         strike=450.0,
         stock_price_open=470.0,
@@ -297,7 +297,7 @@ def test_write_trades_uses_column_mapping(monkeypatch: Any, tmp_path: Path) -> N
     assert row[1] == "SPY"  # Stock (Col A)
     assert row[3] == date(2024, 1, 2)  # Open Date
     assert row[4] == date(2024, 1, 19)  # Exp Date
-    assert row[5] == "C"  # Call or Put
+    assert row[5] == "Call"  # Call or Put
     assert row[6] == "B"  # B/S
     assert row[11] == 450.0  # Strike Price
     assert row[12] == 2.0  # Premium

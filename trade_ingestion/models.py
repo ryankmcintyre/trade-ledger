@@ -8,6 +8,24 @@ from typing import Generic, TypeVar
 T = TypeVar("T")
 
 
+def normalize_option_type(value: str | None) -> str | None:
+    if value is None:
+        return None
+
+    normalized = value.strip()
+    if not normalized:
+        return None
+
+    upper_value = normalized.upper()
+    if upper_value == "C":
+        return "Call"
+    if upper_value == "P":
+        return "Put"
+    if upper_value in {"CALL", "PUT"}:
+        return "Call" if upper_value == "CALL" else "Put"
+    raise ValueError(f"Unsupported option type: {value}")
+
+
 @dataclass(slots=True)
 class CanonicalTrade:
     lot_id: str
@@ -30,6 +48,7 @@ class CanonicalTrade:
     status: str | None = None
 
     def __post_init__(self) -> None:
+        self.call_or_put = normalize_option_type(self.call_or_put)
         if not self.trade_id:
             self.trade_id = make_trade_id(self)
 
@@ -51,6 +70,9 @@ class RawEvent:
     quantity: float
     fees: float | None
     effect: str
+
+    def __post_init__(self) -> None:
+        self.call_or_put = normalize_option_type(self.call_or_put)
 
 
 @dataclass(slots=True)

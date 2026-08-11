@@ -70,7 +70,7 @@ Trade Date,Action,Symbol,Quantity,Price,Commission,Fees,Account,Transaction ID,S
     assert option_buy.symbol == "SPY 240119C00450000"
     assert option_buy.underlying == "SPY"
     assert option_buy.exp_date == date(2024, 1, 19)
-    assert option_buy.call_or_put == "C"
+    assert option_buy.call_or_put == "Call"
     assert option_buy.strike == 450.0
     assert option_buy.side == "B"
     assert option_buy.effect == "OPEN"
@@ -130,7 +130,7 @@ def test_parse_fidelity_csv_real_world_column_names_and_verbose_actions() -> Non
     assert opt_buy_open.symbol == "SPXW 260618P07400000"
     assert opt_buy_open.underlying == "SPXW"
     assert opt_buy_open.exp_date == date(2026, 6, 18)
-    assert opt_buy_open.call_or_put == "P"
+    assert opt_buy_open.call_or_put == "Put"
     assert opt_buy_open.strike == pytest.approx(7400.0)
     assert opt_buy_open.effect == "OPEN"
     assert opt_buy_open.side == "B"
@@ -173,7 +173,7 @@ def test_parse_fidelity_csv_compact_option_symbol_small_strike() -> None:
     assert event.underlying == "NOK"
     assert event.strike == pytest.approx(24.0)
     assert event.exp_date == date(2026, 12, 18)
-    assert event.call_or_put == "C"
+    assert event.call_or_put == "Call"
     assert event.effect == "CLOSE"
     assert event.side == "B"
 
@@ -195,7 +195,7 @@ def test_parse_fidelity_csv_accepts_compact_option_symbol_without_leading_dash()
     assert event.symbol == "NVDL 260807P00026000"
     assert event.underlying == "NVDL"
     assert event.exp_date == date(2026, 8, 7)
-    assert event.call_or_put == "P"
+    assert event.call_or_put == "Put"
     assert event.strike == pytest.approx(26.0)
     assert event.effect == "OPEN"
     assert event.side == "B"
@@ -241,7 +241,7 @@ Trade Date,Action,Symbol,Quantity,Price,Commission,Fees,Account,Transaction ID,S
     assert option_buy.symbol == "SPY 240119C00450000"
     assert option_buy.underlying == "SPY"
     assert option_buy.exp_date == date(2024, 1, 19)
-    assert option_buy.call_or_put == "C"
+    assert option_buy.call_or_put == "Call"
     assert option_buy.strike == 450.0
     assert option_buy.side == "B"
     assert option_buy.effect == "OPEN"
@@ -302,7 +302,7 @@ def test_parse_fidelity_csv_detailed_recovers_renamed_ticker_via_prompt() -> Non
     assert option_event.symbol == "HON 270115C00250000"
     assert option_event.exp_date == date(2027, 1, 15)
     assert option_event.strike == 250.0
-    assert option_event.call_or_put == "C"
+    assert option_event.call_or_put == "Call"
     assert equity_event.symbol == "AAPL"
     assert prompts == [("HON2270115C250", "2027-01-15 Buy to Open HON2270115C250")]
 
