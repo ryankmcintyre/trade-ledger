@@ -244,9 +244,11 @@ def _trade(
     quantity: float = 1.0,
     side: str = "B",
     underlying: str | None = None,
+    strike: float = 450.0,
+    lot_id: str = "lot-1",
 ) -> CanonicalTrade:
     return CanonicalTrade(
-        lot_id="lot-1",
+        lot_id=lot_id,
         trade_id="",
         underlying=underlying if underlying is not None else stock,
         symbol="SPY 240119C00450000",
@@ -254,7 +256,7 @@ def _trade(
         exp_date=date(2024, 1, 19),
         call_or_put="Call",
         side=side,
-        strike=450.0,
+        strike=strike,
         stock_price_open=470.0,
         premium=2.0,
         quantity=quantity,
@@ -432,6 +434,170 @@ def test_write_trades_dedup_by_composite_key(monkeypatch: Any, tmp_path: Path) -
 
     # Try to write the same trade — should be deduped
     trade = _trade()
+    written = writer.write_trades(workbook_path, TABLE_NAME, [trade])
+
+    assert written == 0
+    assert len(table.added_rows) == 0
+
+
+def test_write_trades_does_not_dedup_same_day_trades_with_different_strikes(
+    monkeypatch: Any, tmp_path: Path
+) -> None:
+    """Regression test for issue #43: index options (e.g. SPXW/SPX) all resolve to
+    the same "Stock" display name via UNDERLYING_DISPLAY_MAP, so same-day trades on
+    different strikes with the same side/quantity must not collide on the composite
+    dedup key and be incorrectly skipped."""
+    workbook_path = tmp_path / "ledger.xlsx"
+    workbook_path.write_text("placeholder", encoding="utf-8")
+
+    headers = ["Stock", "Stock Symbol", "Open Date", "Exp Date", "Call or Put", "B/S",
+               "Stock Price DOC", "DTE", "Current Stock Price", "Break Even Price",
+               "Strike Price", "Premium", "C", "Collateral", "(Put) Margin Cash Reserve",
+               "(Call) Cost Basis/Share", "Fees", "Exit Price", "Close Date",
+               "Profit/Loss", "Days Held", "Return on Capital",
+               "Annualized ROR for Options", "Margin Annualized ROR",
+               "Status", "Account", "Source"]
+    table = FakeTable(headers, [])
+    app = FakeApp([])
+    book = FakeBook(str(workbook_path.resolve()), table, app)
+    app.books.append(book)
+
+    monkeypatch.setattr(writer, "xw", FakeXw(app))
+
+    trade_a = _trade(stock="S&P 500 INDEX", underlying="SPXW", strike=7740.0, lot_id="lot-7740")
+    trade_b = _trade(stock="S&P 500 INDEX", underlying="SPXW", strike=7725.0, lot_id="lot-7725")
+
+    written = writer.write_trades(workbook_path, TABLE_NAME, [trade_a, trade_b])
+
+    assert written == 2
+    assert len(table.added_rows) == 2
+
+
+def test_write_trades_does_not_dedup_persisted_row_with_different_strike(
+    monkeypatch: Any, tmp_path: Path
+) -> None:
+    """Regression test for issue #43 exercising the persisted-row path: a same-day,
+    same-side/quantity trade on a different strike must not be treated as a
+    duplicate of an existing row already written to the table in a prior run."""
+    workbook_path = tmp_path / "ledger.xlsx"
+    workbook_path.write_text("placeholder", encoding="utf-8")
+
+    headers = ["Stock", "Stock Symbol", "Open Date", "Exp Date", "Call or Put", "B/S",
+               "Strike Price", "Premium", "C", "Fees", "Exit Price", "Close Date",
+               "Status", "Account"]
+    # Existing persisted row: S&P 500 INDEX, 2024-01-02, B, strike 7740.
+    existing_rows = [["S&P 500 INDEX", "SPXW", date(2024, 1, 2), date(2024, 1, 19), "C", "B",
+                      7740.0, 2.0, 1.0, None, None, None, "Open", "Fidelity"]]
+    table = FakeTable(headers, existing_rows)
+    app = FakeApp([])
+    book = FakeBook(str(workbook_path.resolve()), table, app)
+    app.books.append(book)
+
+    monkeypatch.setattr(writer, "xw", FakeXw(app))
+
+    trade = _trade(stock="S&P 500 INDEX", underlying="SPXW", strike=7725.0, lot_id="lot-7725")
+    written = writer.write_trades(workbook_path, TABLE_NAME, [trade])
+
+    assert written == 1
+    assert len(table.added_rows) == 1
+
+
+def test_write_trades_reconciles_close_to_correct_row_among_matching_strikes(
+    monkeypatch: Any, tmp_path: Path
+) -> None:
+    """A close-only trade must reconcile to the open row whose strike matches its
+    own, not raise an ambiguous-match error, when two open rows share the same
+    Stock/B-S/C/Account but differ only by Strike Price."""
+    workbook_path = tmp_path / "ledger.xlsx"
+    workbook_path.write_text("placeholder", encoding="utf-8")
+
+    headers = ["Stock", "Stock Symbol", "Open Date", "Exp Date", "Call or Put", "B/S",
+               "Strike Price", "Premium", "C", "Fees", "Exit Price", "Close Date",
+               "Status", "Account"]
+    existing_rows = [
+        ["SPY", "SPY", date(2024, 1, 2), date(2024, 1, 19), "C", "B",
+         460.0, 2.0, 1.0, None, None, None, "Open", "Fidelity"],
+        ["SPY", "SPY", date(2024, 1, 2), date(2024, 1, 19), "C", "B",
+         450.0, 2.0, 1.0, None, None, None, "Open", "Fidelity"],
+    ]
+    table = FakeTable(headers, existing_rows)
+    app = FakeApp([])
+    book = FakeBook(str(workbook_path.resolve()), table, app)
+    app.books.append(book)
+
+    monkeypatch.setattr(writer, "xw", FakeXw(app))
+
+    trade = _trade(open_date=None, quantity=1.0, side="B", strike=450.0, lot_id="lot-450")
+    trade.account = "Fidelity"
+    trade.status = "Closed"
+    trade.exit_price = 3.0
+    trade.close_date = date(2024, 1, 5)
+
+    written = writer.write_trades(workbook_path, TABLE_NAME, [trade])
+
+    assert written == 1
+    assert len(table.added_rows) == 0
+    unmatched_row = table.DataBodyRange.Value[0]
+    matched_row = table.DataBodyRange.Value[1]
+    assert unmatched_row[6] == 460.0
+    assert unmatched_row[11] is None
+    assert matched_row[6] == 450.0
+    assert matched_row[10] == 3.0
+    assert matched_row[11] == date(2024, 1, 5)
+    assert matched_row[12] == "Closed"
+
+
+def test_write_trades_does_not_dedup_same_composite_trades_with_different_lot_id(
+    monkeypatch: Any, tmp_path: Path
+) -> None:
+    """When the workbook has a Lot ID column, two legitimate lots that share the
+    same Stock/Open Date/B-S/C/Strike Price (e.g. the same contract opened twice
+    on the same day with the same side and quantity) must not collide on the
+    composite key — CanonicalTrade.lot_id is the primary dedup discriminator."""
+    workbook_path = tmp_path / "ledger.xlsx"
+    workbook_path.write_text("placeholder", encoding="utf-8")
+
+    headers = ["Stock", "Stock Symbol", "Open Date", "Exp Date", "Call or Put", "B/S",
+               "Strike Price", "Premium", "C", "Fees", "Exit Price", "Close Date",
+               "Status", "Account", "Lot ID"]
+    table = FakeTable(headers, [])
+    app = FakeApp([])
+    book = FakeBook(str(workbook_path.resolve()), table, app)
+    app.books.append(book)
+
+    monkeypatch.setattr(writer, "xw", FakeXw(app))
+
+    trade_a = _trade(lot_id="lot-a")
+    trade_b = _trade(lot_id="lot-b")
+
+    written = writer.write_trades(workbook_path, TABLE_NAME, [trade_a, trade_b])
+
+    assert written == 2
+    assert len(table.added_rows) == 2
+    assert {row.get(15) for row in table.DataBodyRange.Value} == {"lot-a", "lot-b"}
+
+
+def test_write_trades_dedups_persisted_row_by_lot_id(monkeypatch: Any, tmp_path: Path) -> None:
+    """A trade whose lot_id matches an existing row's persisted Lot ID value must
+    be treated as a duplicate, even when re-imported with different composite
+    field formatting (dedup should key off Lot ID, not the composite fields,
+    when the column is present)."""
+    workbook_path = tmp_path / "ledger.xlsx"
+    workbook_path.write_text("placeholder", encoding="utf-8")
+
+    headers = ["Stock", "Stock Symbol", "Open Date", "Exp Date", "Call or Put", "B/S",
+               "Strike Price", "Premium", "C", "Fees", "Exit Price", "Close Date",
+               "Status", "Account", "Lot ID"]
+    existing_rows = [["SPY", "SPY", date(2024, 1, 2), date(2024, 1, 19), "C", "B",
+                      450.0, 2.0, 1.0, None, None, None, "Open", "Fidelity", "lot-1"]]
+    table = FakeTable(headers, existing_rows)
+    app = FakeApp([])
+    book = FakeBook(str(workbook_path.resolve()), table, app)
+    app.books.append(book)
+
+    monkeypatch.setattr(writer, "xw", FakeXw(app))
+
+    trade = _trade(lot_id="lot-1")
     written = writer.write_trades(workbook_path, TABLE_NAME, [trade])
 
     assert written == 0

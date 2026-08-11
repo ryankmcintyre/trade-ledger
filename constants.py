@@ -4,8 +4,18 @@ TABLE_NAME = "tbl_trades"
 
 STOCK_FIELD_NAME = "stock"
 
+# Optional workbook column holding CanonicalTrade.lot_id, the primary dedup
+# discriminator. Not every workbook has this column; when present, the writer
+# prefers it over the composite DEDUP_COLUMNS key (see writer._make_dedup_key /
+# writer._existing_dedup_keys) because the composite key is not guaranteed to be
+# unique — e.g. two legitimate lots opened same-day on the same contract with the
+# same side/quantity would otherwise collide and one would be dropped as a
+# duplicate.
+LOT_ID_COLUMN = "Lot ID"
+
 # Mapping from CanonicalTrade field names to workbook column headers.
 FIELD_TO_COLUMN: dict[str, str] = {
+    "lot_id": LOT_ID_COLUMN,
     "stock": "Stock",
     "open_date": "Open Date",
     "exp_date": "Exp Date",
@@ -22,8 +32,13 @@ FIELD_TO_COLUMN: dict[str, str] = {
     "status": "Status",
 }
 
-# Columns used to form the composite dedup key when reading existing rows.
-DEDUP_COLUMNS: tuple[str, ...] = ("Stock", "Open Date", "B/S", "C")
+# Columns used to form the composite dedup key when reading existing rows that
+# have no Lot ID value (e.g. rows written before LOT_ID_COLUMN existed).
+# NOTE: "Strike Price" is required here because index options (e.g. SPXW/SPX) all
+# NOTE: resolve to the same "Stock" display name via UNDERLYING_DISPLAY_MAP, so without
+# NOTE: the strike, distinct same-day/same-side/same-quantity trades on different
+# NOTE: strikes would collide on the same composite key and be dropped as duplicates.
+DEDUP_COLUMNS: tuple[str, ...] = ("Stock", "Open Date", "B/S", "C", "Strike Price")
 
 # Formula-driven column holding the ticker resolved from the Column A Stocks entity.
 STOCK_SYMBOL_COLUMN = "Stock Symbol"
