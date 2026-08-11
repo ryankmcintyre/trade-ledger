@@ -440,7 +440,13 @@ def _row_matches_trade(
 ) -> bool:
     stock_value = _row_ticker(row, col_indices.get("Stock"), symbol_index)
     trade_stock_value = str(trade.stock or trade.underlying or "").strip()
-    if stock_value and trade_stock_value and stock_value != trade_stock_value:
+    # An empty/unused table row (e.g. a trailing blank row left for future entries) has no
+    # Stock value of its own, so it must never be treated as a match: without this check every
+    # blank row would trivially satisfy the remaining comparisons below and be reported as an
+    # ambiguous duplicate alongside the one real open row.
+    if not stock_value:
+        return False
+    if trade_stock_value and stock_value != trade_stock_value:
         return False
 
     side_index = col_indices.get("B/S")
