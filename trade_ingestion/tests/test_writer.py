@@ -498,6 +498,47 @@ def test_write_trades_preserves_existing_stock_cell_when_updating_row(monkeypatc
     assert updated_row[0] == "SPY-LINKED"
 
 
+def test_write_trades_matches_single_open_row_when_blank_rows_present(
+    monkeypatch: Any, tmp_path: Path
+) -> None:
+    """A trailing blank/unused table row must never be counted as an ambiguous match.
+
+    Regression test for https://github.com/ryankmcintyre/trade-ledger/issues/41: a close-only
+    trade with no Open Date of its own (e.g. a sell with no matching buy in the CSV) previously
+    matched both the single real open row *and* any blank template rows in the table, because
+    every comparison in `_row_matches_trade` trivially passed against blank cells.
+    """
+    workbook_path = tmp_path / "ledger.xlsx"
+    workbook_path.write_text("placeholder", encoding="utf-8")
+
+    headers = ["Stock", "Stock Symbol", "Open Date", "B/S", "C", "Exit Price", "Close Date",
+               "Status", "Account"]
+    existing_row = ["BB", "BB", date(2026, 8, 5), "C", 5.0, None, None, "Open", "BrokerageLink"]
+    blank_row = [None, None, None, None, None, None, None, None, None]
+    table = FakeTable(headers, [existing_row, blank_row.copy(), blank_row.copy()])
+    app = FakeApp([])
+    book = FakeBook(str(workbook_path.resolve()), table, app)
+    app.books.append(book)
+
+    monkeypatch.setattr(writer, "xw", FakeXw(app))
+
+    trade = _trade(stock="BB", open_date=None, quantity=5.0, side="C")
+    trade.account = "BrokerageLink"
+    trade.status = "Closed"
+    trade.exit_price = 8.825
+    trade.close_date = date(2026, 8, 4)
+
+    written = writer.write_trades(workbook_path, TABLE_NAME, [trade])
+
+    assert written == 1
+    assert len(table.added_rows) == 0
+    updated_row = table.DataBodyRange.Value[0]
+    assert updated_row[5] == 8.825
+    assert updated_row[6] == date(2026, 8, 4)
+    assert updated_row[7] == "Closed"
+    assert table.DataBodyRange.Value[1:] == [blank_row, blank_row]
+
+
 def test_write_trades_rejects_ambiguous_close_match(monkeypatch: Any, tmp_path: Path) -> None:
     workbook_path = tmp_path / "ledger.xlsx"
     workbook_path.write_text("placeholder", encoding="utf-8")
