@@ -977,6 +977,70 @@ def test_write_trades_matches_single_open_row_when_blank_rows_present(
     assert table.DataBodyRange.Value[2:] == [blank_row, blank_row]
 
 
+def test_write_trades_filters_fifo_candidates_by_option_identifiers(
+    monkeypatch: Any, tmp_path: Path
+) -> None:
+    """A close must never be reconciled to a same-account option row with a
+    different expiry or contract type, even when both rows share the same
+    underlying/side/strike and are larger than the incoming close quantity."""
+    workbook_path = tmp_path / "ledger.xlsx"
+    workbook_path.write_text("placeholder", encoding="utf-8")
+
+    headers = ["Stock", "Stock Symbol", "Open Date", "Exp Date", "Call or Put", "B/S",
+               "Strike Price", "Premium", "C", "Fees", "Exit Price", "Close Date", "Status", "Account"]
+    existing_rows = [
+        # Wrong expiry — earlier Open Date, so it would win a naive FIFO fallback.
+        ["SPY", "SPY", date(2024, 1, 1), date(2024, 1, 12), "Call", "B",
+         450.0, 2.0, 2.0, None, None, None, "Open", "Fidelity"],
+        # Correct contract: matches the incoming close's Exp Date and Call or Put.
+        ["SPY", "SPY", date(2024, 1, 2), date(2024, 1, 19), "Call", "B",
+         450.0, 2.0, 2.0, None, None, None, "Open", "Fidelity"],
+    ]
+    table = FakeTable(headers, existing_rows)
+    app = FakeApp([])
+    book = FakeBook(str(workbook_path.resolve()), table, app)
+    app.books.append(book)
+
+    monkeypatch.setattr(writer, "xw", FakeXw(app))
+
+    close = CanonicalTrade(
+        lot_id="close-1",
+        trade_id="",
+        underlying="SPY",
+        symbol="SPY 240119C00450000",
+        open_date=None,
+        exp_date=date(2024, 1, 19),
+        call_or_put="Call",
+        side="B",
+        strike=450.0,
+        stock_price_open=None,
+        premium=None,
+        quantity=1.0,
+        fees=None,
+        exit_price=3.0,
+        close_date=date(2024, 1, 5),
+        account="Fidelity",
+        stock="SPY",
+        status="Closed",
+    )
+
+    written = writer.write_trades(workbook_path, TABLE_NAME, [close])
+
+    assert written == 1
+    updated_rows = table.DataBodyRange.Value
+    # The wrong-expiry row is untouched.
+    assert updated_rows[0][8] == 2.0
+    assert updated_rows[0][12] == "Open"
+    # The matching-contract row absorbed the partial close and was split.
+    assert updated_rows[1][8] == 1.0
+    assert updated_rows[1][12] == "Open"
+    split_row = table.added_rows[0]
+    assert split_row[4] == date(2024, 1, 19)  # Exp Date
+    assert split_row[5] == "Call"  # Call or Put
+    assert split_row[9] == 1.0  # C
+    assert split_row[13] == "Closed"
+
+
 def test_write_trades_rejects_ambiguous_close_match(monkeypatch: Any, tmp_path: Path) -> None:
     workbook_path = tmp_path / "ledger.xlsx"
     workbook_path.write_text("placeholder", encoding="utf-8")

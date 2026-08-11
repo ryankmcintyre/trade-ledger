@@ -499,11 +499,67 @@ def _find_existing_row_to_update(
     if len(candidates) == 1:
         return candidates[0]
 
+    # Several rows share the same underlying/side/strike/quantity profile, but
+    # candidate matching above never compared Exp Date/Call or Put, so distinct
+    # option contracts (e.g. different expiries, or a put vs. a call) can both
+    # reach this point. Narrow to rows whose option identifiers agree with the
+    # incoming trade before considering FIFO, so a close is never silently
+    # reconciled against the wrong contract.
+    option_candidates = _filter_candidates_by_option_fields(candidates, headers, trade)
+    if len(option_candidates) == 1:
+        return option_candidates[0]
+
+    if trade.exp_date is not None or trade.call_or_put:
+        context = trade.trade_id or trade.lot_id or trade.symbol or "trade"
+        raise ValueError(
+            f"Multiple existing rows matched close trade '{context}'; cannot reconcile automatically"
+        )
+
     # TODO: Several partially-open rows qualify for this close and none matches
     # exactly. Default to FIFO (earliest Open Date first, ties broken by table
     # row order) for review — the issue does not specify a required order when
     # more than one open lot could absorb the same close.
     return _fifo_earliest_candidate(candidates, headers)
+
+
+def _filter_candidates_by_option_fields(
+    candidates: list[tuple[int, list[Any]]], headers: list[str], trade: CanonicalTrade
+) -> list[tuple[int, list[Any]]]:
+    """Narrow `candidates` to rows whose Exp Date/Call or Put agree with `trade`.
+
+    `_row_matches_trade` never compares these fields, so equity candidates are
+    returned unchanged; only applies when the incoming trade actually carries
+    option identifiers.
+    """
+    if trade.exp_date is None and not trade.call_or_put:
+        return candidates
+
+    exp_date_index = headers.index("Exp Date") if "Exp Date" in headers else None
+    call_put_index = headers.index("Call or Put") if "Call or Put" in headers else None
+
+    filtered: list[tuple[int, list[Any]]] = []
+    for idx, row in candidates:
+        if trade.exp_date is not None and exp_date_index is not None and exp_date_index < len(row):
+            row_value = row[exp_date_index]
+            if row_value not in (None, ""):
+                if isinstance(row_value, (int, float)):
+                    row_exp_date = _excel_serial_to_date(float(row_value))
+                elif hasattr(row_value, "date") and callable(getattr(row_value, "date", None)):
+                    row_exp_date = row_value.date()
+                elif isinstance(row_value, date):
+                    row_exp_date = row_value
+                else:
+                    row_exp_date = None
+                if row_exp_date is not None and row_exp_date != trade.exp_date:
+                    continue
+
+        if trade.call_or_put and call_put_index is not None and call_put_index < len(row):
+            row_value = row[call_put_index]
+            if row_value not in (None, "") and str(row_value).strip() != trade.call_or_put.strip():
+                continue
+
+        filtered.append((idx, row))
+    return filtered
 
 
 def _row_quantity(row: list[Any], headers: list[str]) -> float | None:
