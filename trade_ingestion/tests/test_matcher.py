@@ -24,7 +24,7 @@ def _event(
         symbol="SPY 240119C00450000",
         trade_date=trade_date,
         exp_date=date(2024, 1, 19),
-        call_or_put="C",
+        call_or_put="Call",
         side=side,
         strike=450.0,
         stock_price=470.0,

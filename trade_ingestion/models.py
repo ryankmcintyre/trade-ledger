@@ -5,7 +5,23 @@ from datetime import date
 from hashlib import sha256
 from typing import Generic, TypeVar
 
+from constants import OPTION_TYPE_ALIASES
+
 T = TypeVar("T")
+
+
+def normalize_option_type(value: str | None) -> str | None:
+    if value is None:
+        return None
+
+    normalized = value.strip()
+    if not normalized:
+        return None
+
+    canonical = OPTION_TYPE_ALIASES.get(normalized.upper())
+    if canonical is None:
+        raise ValueError(f"Unsupported option type: {value}")
+    return canonical
 
 
 @dataclass(slots=True)
@@ -30,6 +46,7 @@ class CanonicalTrade:
     status: str | None = None
 
     def __post_init__(self) -> None:
+        self.call_or_put = normalize_option_type(self.call_or_put)
         if not self.trade_id:
             self.trade_id = make_trade_id(self)
 
@@ -51,6 +68,9 @@ class RawEvent:
     quantity: float
     fees: float | None
     effect: str
+
+    def __post_init__(self) -> None:
+        self.call_or_put = normalize_option_type(self.call_or_put)
 
 
 @dataclass(slots=True)

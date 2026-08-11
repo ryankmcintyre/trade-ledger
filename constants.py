@@ -40,3 +40,14 @@ UNDERLYING_DISPLAY_MAP: dict[str, str] = {
     "SPXW": "S&P 500 INDEX",
     "SPX": "S&P 500 INDEX",
 }
+
+# Canonical option-type values written to the workbook, and the broker-supplied
+# aliases (upper-cased) that normalize to them.
+CALL_OPTION_TYPE = "Call"
+PUT_OPTION_TYPE = "Put"
+OPTION_TYPE_ALIASES: dict[str, str] = {
+    "C": CALL_OPTION_TYPE,
+    "CALL": CALL_OPTION_TYPE,
+    "P": PUT_OPTION_TYPE,
+    "PUT": PUT_OPTION_TYPE,
+}
