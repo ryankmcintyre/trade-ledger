@@ -206,7 +206,16 @@ def write_trades_detailed(
                     pending.append(split_trade)
                     existing_keys.add(key)
                 else:
-                    _update_existing_trade_row(sheet, table, headers, header_positions, row_index, trade)
+                    exact_trade = trade
+                    if trade.open_date is None:
+                        existing_open_fees = _row_fees(row, headers)
+                        if existing_open_fees is not None:
+                            exact_trade = replace(
+                                trade, fees=existing_open_fees + (trade.fees or 0.0)
+                            )
+                    _update_existing_trade_row(
+                        sheet, table, headers, header_positions, row_index, exact_trade
+                    )
                     updated_rows += 1
                 continue
 
