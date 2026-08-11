@@ -15,6 +15,28 @@ Aug-3-2026,Buy,AAPL,100,180.50,1.00,IRA-1,EQ-BUY,Equity
     assert events[0].trade_date == date(2026, 8, 3)
 
 
+def test_parse_fidelity_csv_uses_provided_account_parameter() -> None:
+    content = """Trade Date,Action,Symbol,Quantity,Price,Commission,Account,Transaction ID,Security Type
+Aug-3-2026,Buy,AAPL,100,180.50,1.00,IRA-1,EQ-BUY,Equity
+"""
+
+    events = parse_fidelity_csv_detailed(content, account="Roth IRA").events
+
+    assert events[0].account == "Roth IRA"
+    assert events[0].broker == "Fidelity"
+
+
+def test_parse_fidelity_csv_defaults_account_to_broker_name_when_omitted() -> None:
+    content = """Trade Date,Action,Symbol,Quantity,Price,Commission,Account,Transaction ID,Security Type
+Aug-3-2026,Buy,AAPL,100,180.50,1.00,IRA-1,EQ-BUY,Equity
+"""
+
+    events = parse_fidelity_csv_detailed(content).events
+
+    assert events[0].account == "Fidelity"
+    assert events[0].broker == "Fidelity"
+
+
 def test_parse_fidelity_csv_skips_metadata_and_non_trade_rows() -> None:
     content = """Metadata,Value
 Generated,2024-01-01
