@@ -5,6 +5,8 @@ from datetime import date
 from hashlib import sha256
 from typing import Generic, TypeVar
 
+from constants import OPTION_TYPE_ALIASES
+
 T = TypeVar("T")
 
 
@@ -16,14 +18,10 @@ def normalize_option_type(value: str | None) -> str | None:
     if not normalized:
         return None
 
-    upper_value = normalized.upper()
-    if upper_value == "C":
-        return "Call"
-    if upper_value == "P":
-        return "Put"
-    if upper_value in {"CALL", "PUT"}:
-        return "Call" if upper_value == "CALL" else "Put"
-    raise ValueError(f"Unsupported option type: {value}")
+    canonical = OPTION_TYPE_ALIASES.get(normalized.upper())
+    if canonical is None:
+        raise ValueError(f"Unsupported option type: {value}")
+    return canonical
 
 
 @dataclass(slots=True)
