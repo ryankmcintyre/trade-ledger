@@ -26,13 +26,13 @@ Excel is still required on the machine because `xlwings` uses Excel via COM auto
 **Usage:**
 
 ```
-trade_ledger.exe <broker> <csv_path> --workbook <workbook_path> --sheet <sheet_name>
+trade_ledger.exe <broker> <csv_path> --workbook <workbook_path> --table <table_name>
 ```
 
 **Example:**
 
 ```
-trade_ledger.exe fidelity "C:\Downloads\History.csv" --workbook "C:\trades\ledger.xlsx" --sheet "Trades"
+trade_ledger.exe fidelity "C:\Downloads\History.csv" --workbook "C:\trades\ledger.xlsx" --table "tbl_trades"
 ```
 
 ---
@@ -61,7 +61,7 @@ pip install -r requirements.txt -r requirements-dev.txt
 ## Usage
 
 ```
-python main.py <broker> <csv_path> --workbook <workbook_path> --sheet <sheet_name>
+python main.py <broker> <csv_path> --workbook <workbook_path> --table <table_name>
 ```
 
 | Argument | Description |
@@ -69,19 +69,19 @@ python main.py <broker> <csv_path> --workbook <workbook_path> --sheet <sheet_nam
 | `broker` | Broker adapter name (see [Supported brokers](#supported-brokers)) |
 | `csv_path` | Path to the broker-exported CSV file |
 | `--workbook` | Path to the Excel workbook containing `tbl_trades` |
-| `--sheet` | Name of the worksheet inside the workbook that holds the `tbl_trades` table (required — a workbook may contain several sheets with a table of that name) |
+| `--table` | Name of the Excel table inside the workbook that will receive imported trades (required — table names are unique within a workbook) |
 | `--account` | Optional account identifier written to `RawEvent.account` for imported trades. Independent of any Account/Account Number columns in the CSV. Defaults to the `broker` argument when omitted. |
 
 **Example:**
 
 ```bash
-python main.py fidelity ~/Downloads/History.csv --workbook ~/trades/ledger.xlsx --sheet Trades
+python main.py fidelity ~/Downloads/History.csv --workbook ~/trades/ledger.xlsx --table tbl_trades
 ```
 
 **Output:**
 
 ```
-Ingested 12 trade rows to /Users/ryan/trades/ledger.xlsx [Trades]; skipped 3 duplicate rows; left 2 open positions unmatched
+Ingested 12 trade rows to /Users/ryan/trades/ledger.xlsx [tbl_trades]; skipped 3 duplicate rows; left 2 open positions unmatched
 ```
 
 - **Ingested** — new rows written to `tbl_trades`
@@ -134,7 +134,7 @@ To export from Fidelity: **Accounts & Trade → Activity & Orders → History** 
 1. The adapter parses the CSV into a list of raw trade events (one buy or sell per row).
 2. Same-day events for the same symbol/side/effect are pre-aggregated (weighted-average pricing, summed quantities).
 3. The matcher pairs open and close events FIFO within each `(account, symbol, side)` group into complete trade rows. Partial closes produce two rows: one matched, one remaining open. Sells without a matching open produce close-only rows.
-4. The writer locates `tbl_trades` on the worksheet named by `--sheet`, reads existing rows to skip duplicates (composite key: Stock + Open Date + B/S + Quantity, where the ticker is taken from the resolved `Stock Symbol` column), then appends new rows.
+4. The writer locates the Excel table named by `--table`, reads existing rows to skip duplicates (composite key: Stock + Open Date + B/S + Quantity, where the ticker is taken from the resolved `Stock Symbol` column), then appends new rows.
 5. Each new Column A ("Stock") cell is converted to the Excel **Stocks linked data type**, because the workbook derives `Stock Symbol` and `Current Stock Price` from `_FV(A, ...)` formulas that only accept a rich value — a plain ticker string leaves those columns unresolved.
 6. Formula-driven columns are never written — they remain owned by Excel.
 

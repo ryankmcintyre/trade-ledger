@@ -168,20 +168,21 @@ class FakeTable:
 
 
 class FakeSheetApi:
-    def __init__(self, table: FakeTable) -> None:
-        self._table = table
+    def __init__(self, sheet: "FakeSheet") -> None:
+        self._sheet = sheet
 
     def ListObjects(self, name: str) -> FakeTable:
-        if name != TABLE_NAME:
+        if name != TABLE_NAME or self._sheet.list_object_name != TABLE_NAME:
             raise KeyError(name)
-        return self._table
+        return self._sheet._table
 
 
 class FakeSheet:
-    def __init__(self, table: FakeTable, name: str = SHEET_NAME) -> None:
-        self.api = FakeSheetApi(table)
+    def __init__(self, table: FakeTable, name: str = SHEET_NAME, *, list_object_name: str | None = None) -> None:
+        self.api = FakeSheetApi(self)
         self.name = name
         self._table = table
+        self.list_object_name = list_object_name
         self.conversion_calls: list[tuple[int, int, int, str]] = []
         self.conversion_error: Exception | None = None
         # Default: every ticker resolves to itself, mirroring a working Stocks lookup.
@@ -208,7 +209,7 @@ class FakeBooks(list):
 class FakeBook:
     def __init__(self, fullname: str, table: FakeTable, app: "FakeApp", sheet_name: str = SHEET_NAME) -> None:
         self.fullname = fullname
-        self.sheets = [FakeSheet(table, sheet_name)]
+        self.sheets = [FakeSheet(table, sheet_name, list_object_name=TABLE_NAME)]
         self.app = app
         self.saved = False
         self.closed = False
@@ -285,7 +286,7 @@ def test_write_trades_uses_column_mapping(monkeypatch: Any, tmp_path: Path) -> N
 
     trade = _trade()
     trade.status = "Closed"
-    written = writer.write_trades(workbook_path, SHEET_NAME, [trade])
+    written = writer.write_trades(workbook_path, TABLE_NAME, [trade])
 
     assert written == 1
     assert book.saved is True
@@ -328,7 +329,7 @@ def test_write_trades_inserts_below_last_populated_row(
 
     monkeypatch.setattr(writer, "xw", FakeXw(app))
 
-    written = writer.write_trades(workbook_path, SHEET_NAME, [_trade()])
+    written = writer.write_trades(workbook_path, TABLE_NAME, [_trade()])
 
     assert written == 1
     assert table.DataBodyRange.Value[0] == existing_row
@@ -352,7 +353,7 @@ def test_write_trades_ignores_formula_only_trailing_rows(
 
     monkeypatch.setattr(writer, "xw", FakeXw(app))
 
-    written = writer.write_trades(workbook_path, SHEET_NAME, [_trade()])
+    written = writer.write_trades(workbook_path, TABLE_NAME, [_trade()])
 
     assert written == 1
     assert table.DataBodyRange.Value[0] == existing_row
@@ -377,7 +378,7 @@ def test_write_trades_preserves_order_above_trailing_blank_rows(
     monkeypatch.setattr(writer, "xw", FakeXw(app))
 
     trades = [_trade(stock="SPY"), _trade(stock="QQQ", quantity=2.0)]
-    written = writer.write_trades(workbook_path, SHEET_NAME, trades)
+    written = writer.write_trades(workbook_path, TABLE_NAME, trades)
 
     assert written == 2
     assert table.DataBodyRange.Value[0] == existing_row
@@ -400,7 +401,7 @@ def test_write_trades_inserts_at_start_of_blank_table(
 
     monkeypatch.setattr(writer, "xw", FakeXw(app))
 
-    written = writer.write_trades(workbook_path, SHEET_NAME, [_trade()])
+    written = writer.write_trades(workbook_path, TABLE_NAME, [_trade()])
 
     assert written == 1
     assert table.DataBodyRange.Value[0][1] == "SPY"
@@ -431,7 +432,7 @@ def test_write_trades_dedup_by_composite_key(monkeypatch: Any, tmp_path: Path) -
 
     # Try to write the same trade — should be deduped
     trade = _trade()
-    written = writer.write_trades(workbook_path, SHEET_NAME, [trade])
+    written = writer.write_trades(workbook_path, TABLE_NAME, [trade])
 
     assert written == 0
     assert len(table.added_rows) == 0
@@ -457,7 +458,7 @@ def test_write_trades_updates_existing_open_row_for_close_trade(monkeypatch: Any
     trade.exit_price = 3.0
     trade.close_date = date(2024, 1, 5)
 
-    written = writer.write_trades(workbook_path, SHEET_NAME, [trade])
+    written = writer.write_trades(workbook_path, TABLE_NAME, [trade])
 
     assert written == 1
     assert len(table.added_rows) == 0
@@ -489,7 +490,7 @@ def test_write_trades_preserves_existing_stock_cell_when_updating_row(monkeypatc
     trade.exit_price = 3.0
     trade.close_date = date(2024, 1, 5)
 
-    written = writer.write_trades(workbook_path, SHEET_NAME, [trade])
+    written = writer.write_trades(workbook_path, TABLE_NAME, [trade])
 
     assert written == 1
     assert len(table.added_rows) == 0
@@ -518,7 +519,7 @@ def test_write_trades_rejects_ambiguous_close_match(monkeypatch: Any, tmp_path: 
     trade.close_date = date(2024, 1, 5)
 
     with pytest.raises(ValueError, match="Multiple existing rows matched close trade"):
-        writer.write_trades(workbook_path, SHEET_NAME, [trade])
+        writer.write_trades(workbook_path, TABLE_NAME, [trade])
 
 
 def test_write_trades_skips_none_values(monkeypatch: Any, tmp_path: Path) -> None:
@@ -559,7 +560,7 @@ def test_write_trades_skips_none_values(monkeypatch: Any, tmp_path: Path) -> Non
         account="Fidelity",
         stock="SOLS",
     )
-    written = writer.write_trades(workbook_path, SHEET_NAME, [trade])
+    written = writer.write_trades(workbook_path, TABLE_NAME, [trade])
 
     assert written == 1
     row = table.added_rows[0]
@@ -582,7 +583,7 @@ def test_write_trades_rejects_unknown_sheet(monkeypatch: Any, tmp_path: Path) ->
 
     monkeypatch.setattr(writer, "xw", FakeXw(app))
 
-    with pytest.raises(ValueError, match="Could not find worksheet 'Missing'"):
+    with pytest.raises(ValueError, match="Could not find table 'Missing' in the workbook"):
         writer.write_trades(workbook_path, "Missing", [_trade()])
 
     assert len(table.added_rows) == 0
@@ -597,12 +598,13 @@ def test_write_trades_uses_only_the_named_sheet(monkeypatch: Any, tmp_path: Path
     target_table = FakeTable(headers, [])
     app = FakeApp([])
     book = FakeBook(str(workbook_path.resolve()), other_table, app, sheet_name="Other")
-    book.sheets.append(FakeSheet(target_table, SHEET_NAME))
+    book.sheets[0].list_object_name = None
+    book.sheets.append(FakeSheet(target_table, SHEET_NAME, list_object_name=TABLE_NAME))
     app.books.append(book)
 
     monkeypatch.setattr(writer, "xw", FakeXw(app))
 
-    written = writer.write_trades(workbook_path, SHEET_NAME, [_trade()])
+    written = writer.write_trades(workbook_path, TABLE_NAME, [_trade()])
 
     assert written == 1
     assert len(target_table.added_rows) == 1
@@ -625,8 +627,8 @@ def test_write_trades_rejects_missing_table_on_sheet(monkeypatch: Any, tmp_path:
 
     monkeypatch.setattr(writer, "xw", FakeXw(app))
 
-    with pytest.raises(ValueError, match=f"Could not find table '{TABLE_NAME}' on worksheet '{SHEET_NAME}'"):
-        writer.write_trades(workbook_path, SHEET_NAME, [_trade()])
+    with pytest.raises(ValueError, match=f"Could not find table '{TABLE_NAME}' in the workbook"):
+        writer.write_trades(workbook_path, TABLE_NAME, [_trade()])
 
     assert len(table.added_rows) == 0
 
@@ -673,14 +675,14 @@ def test_write_trades_retries_transient_com_error_on_sheet_lookup(monkeypatch: A
     app = FakeApp([])
     book = FakeBook(str(workbook_path.resolve()), table, app)
     # Fail twice with a transient RPC_E_CALL_REJECTED-style error, then succeed.
-    book.sheets = FlakySheets([FakeSheet(table, SHEET_NAME)], fail_times=2)
+    book.sheets = FlakySheets([FakeSheet(table, SHEET_NAME, list_object_name=TABLE_NAME)], fail_times=2)
     app.books.append(book)
 
     monkeypatch.setattr(writer, "xw", FakeXw(app))
     monkeypatch.setattr(writer, "pywintypes", pywintypes)
     monkeypatch.setattr(writer.time, "sleep", lambda _seconds: None)
 
-    written = writer.write_trades(workbook_path, SHEET_NAME, [_trade()])
+    written = writer.write_trades(workbook_path, TABLE_NAME, [_trade()])
 
     assert written == 1
     assert len(table.added_rows) == 1
@@ -695,13 +697,13 @@ def test_write_trades_retries_enumeration_type_error_on_sheet_lookup(monkeypatch
     app = FakeApp([])
     book = FakeBook(str(workbook_path.resolve()), table, app)
     # Fail with the secondary "does not support enumeration" TypeError, then succeed.
-    book.sheets = FlakyEnumerationSheets([FakeSheet(table, SHEET_NAME)], fail_times=1)
+    book.sheets = FlakyEnumerationSheets([FakeSheet(table, SHEET_NAME, list_object_name=TABLE_NAME)], fail_times=1)
     app.books.append(book)
 
     monkeypatch.setattr(writer, "xw", FakeXw(app))
     monkeypatch.setattr(writer.time, "sleep", lambda _seconds: None)
 
-    written = writer.write_trades(workbook_path, SHEET_NAME, [_trade()])
+    written = writer.write_trades(workbook_path, TABLE_NAME, [_trade()])
 
     assert written == 1
     assert len(table.added_rows) == 1
@@ -724,7 +726,7 @@ def test_write_trades_raises_clear_error_when_com_never_recovers(monkeypatch: An
     monkeypatch.setattr(writer.time, "sleep", lambda _seconds: None)
 
     with pytest.raises(writer.ComRetryExhaustedError, match="Excel COM server was busy/unresponsive"):
-        writer.write_trades(workbook_path, SHEET_NAME, [_trade()])
+        writer.write_trades(workbook_path, TABLE_NAME, [_trade()])
 
 
 
@@ -751,7 +753,7 @@ def test_write_trades_converts_stock_cell_to_stocks_data_type(monkeypatch: Any, 
     workbook_path, table, book, app = _build_workbook(tmp_path, FULL_HEADERS, [])
     monkeypatch.setattr(writer, "xw", FakeXw(app))
 
-    result = writer.write_trades_detailed(workbook_path, SHEET_NAME, [_trade(stock="NVDL")])
+    result = writer.write_trades_detailed(workbook_path, TABLE_NAME, [_trade(stock="NVDL")])
 
     assert result.rows_written == 1
     assert result.failed_conversions == []
@@ -777,7 +779,7 @@ def test_write_trades_reports_unresolved_conversion_and_keeps_plain_text(
     # Excel accepts the call but cannot resolve the entity (offline / unknown ticker).
     book.sheets[0].stock_resolver = lambda ticker: "#FIELD!"
 
-    result = writer.write_trades_detailed(workbook_path, SHEET_NAME, [_trade(stock="SPXW")])
+    result = writer.write_trades_detailed(workbook_path, TABLE_NAME, [_trade(stock="SPXW")])
 
     assert result.rows_written == 1
     assert result.failed_conversions == ["SPXW"]
@@ -796,7 +798,7 @@ def test_write_trades_retries_with_prompted_ticker(monkeypatch: Any, tmp_path: P
 
     result = writer.write_trades_detailed(
         workbook_path,
-        SHEET_NAME,
+        TABLE_NAME,
         [_trade(stock="SPXW")],
         ticker_prompt=prompt,
     )
@@ -815,7 +817,7 @@ def test_write_trades_records_prompt_retry_failure(monkeypatch: Any, tmp_path: P
 
     result = writer.write_trades_detailed(
         workbook_path,
-        SHEET_NAME,
+        TABLE_NAME,
         [_trade(stock="SPXW")],
         ticker_prompt=lambda _original, _trade: "SPY",
     )
@@ -835,7 +837,7 @@ def test_write_trades_survives_conversion_com_error(monkeypatch: Any, tmp_path: 
     # Older Excel builds raise when the Stocks service is unavailable.
     book.sheets[0].conversion_error = RuntimeError("Stocks data type unavailable")
 
-    result = writer.write_trades_detailed(workbook_path, SHEET_NAME, [_trade(stock="NVDL")])
+    result = writer.write_trades_detailed(workbook_path, TABLE_NAME, [_trade(stock="NVDL")])
 
     assert result.rows_written == 1
     assert result.failed_conversions == ["NVDL"]
@@ -853,7 +855,7 @@ def test_write_trades_dedups_using_resolved_stock_symbol_column(
     workbook_path, table, _book, app = _build_workbook(tmp_path, FULL_HEADERS, existing_rows)
     monkeypatch.setattr(writer, "xw", FakeXw(app))
 
-    written = writer.write_trades(workbook_path, SHEET_NAME, [_trade(stock="SPY")])
+    written = writer.write_trades(workbook_path, TABLE_NAME, [_trade(stock="SPY")])
 
     assert written == 0
     assert len(table.added_rows) == 0
@@ -864,7 +866,7 @@ def test_write_trades_second_run_writes_no_rows(monkeypatch: Any, tmp_path: Path
     monkeypatch.setattr(writer, "xw", FakeXw(app))
 
     trades = [_trade(stock="SPY")]
-    assert writer.write_trades(workbook_path, SHEET_NAME, trades) == 1
+    assert writer.write_trades(workbook_path, TABLE_NAME, trades) == 1
 
     # Rebuild the workbook state as Excel would persist it: Column A now shows the
     # Stocks entity display name and Column B holds the resolved ticker.
@@ -875,7 +877,7 @@ def test_write_trades_second_run_writes_no_rows(monkeypatch: Any, tmp_path: Path
     workbook_path2, table2, _book2, app2 = _build_workbook(tmp_path, FULL_HEADERS, [persisted])
     monkeypatch.setattr(writer, "xw", FakeXw(app2))
 
-    assert writer.write_trades(workbook_path2, SHEET_NAME, trades) == 0
+    assert writer.write_trades(workbook_path2, TABLE_NAME, trades) == 0
     assert len(table2.added_rows) == 0
 
 
@@ -889,7 +891,7 @@ def test_write_trades_reports_underlying_ticker_for_remapped_display_value(
     # Column A holds a remapped display value (UNDERLYING_DISPLAY_MAP), but the
     # warning should name the ticker the user actually imported.
     trade = _trade(stock="S&P 500 INDEX", underlying="SPXW")
-    result = writer.write_trades_detailed(workbook_path, SHEET_NAME, [trade])
+    result = writer.write_trades_detailed(workbook_path, TABLE_NAME, [trade])
 
     assert result.failed_conversions == ["SPXW"]
 
@@ -904,7 +906,7 @@ def test_write_trades_restores_plain_text_without_verification_column(
     workbook_path, table, book, app = _build_workbook(tmp_path, headers, [])
     monkeypatch.setattr(writer, "xw", FakeXw(app))
 
-    result = writer.write_trades_detailed(workbook_path, SHEET_NAME, [_trade(stock="SPY")])
+    result = writer.write_trades_detailed(workbook_path, TABLE_NAME, [_trade(stock="SPY")])
 
     assert result.rows_written == 1
     assert result.failed_conversions == ["SPY"]

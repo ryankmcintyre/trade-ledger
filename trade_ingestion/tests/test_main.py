@@ -70,10 +70,10 @@ def test_run_pipeline_uses_broker_adapter_and_writer(monkeypatch: Any, tmp_path:
         return MatchResult(trades=trades, skipped_duplicates=0, open_positions=1)
 
     def fake_write_trades(
-        path: Path, sheet_name: str, input_trades: list[CanonicalTrade], ticker_prompt: Any = None
+        path: Path, table_name: str, input_trades: list[CanonicalTrade], ticker_prompt: Any = None
     ) -> WriteResult:
         captured["write_path"] = path
-        captured["sheet_name"] = sheet_name
+        captured["table_name"] = table_name
         captured["trades"] = input_trades
         captured["ticker_prompt"] = ticker_prompt
         return WriteResult(rows_written=len(input_trades), failed_conversions=[])
@@ -83,14 +83,14 @@ def test_run_pipeline_uses_broker_adapter_and_writer(monkeypatch: Any, tmp_path:
     monkeypatch.setattr(main, "write_trades_detailed", fake_write_trades)
 
     result = main.run_pipeline(
-        broker="fake", csv_path=csv_path, workbook_path=workbook_path, sheet_name="Trades"
+        broker="fake", csv_path=csv_path, workbook_path=workbook_path, table_name="Trades"
     )
 
     assert result == main.PipelineResult(rows_ingested=1, rows_skipped=0, open_positions=1)
     assert captured["content"] == "example"
     assert captured["events"] == events
     assert captured["write_path"] == workbook_path
-    assert captured["sheet_name"] == "Trades"
+    assert captured["table_name"] == "Trades"
     assert captured["trades"] == trades
     assert captured["ticker_prompt"] is None
     assert captured["account"] == "fake"
@@ -104,7 +104,7 @@ def test_run_pipeline_rejects_unsupported_broker(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="Unsupported broker"):
         main.run_pipeline(
-            broker="unknown", csv_path=csv_path, workbook_path=workbook_path, sheet_name="Trades"
+            broker="unknown", csv_path=csv_path, workbook_path=workbook_path, table_name="Trades"
         )
 
 
@@ -123,7 +123,7 @@ def test_run_pipeline_uses_explicit_account_when_provided(monkeypatch: Any, tmp_
         return MatchResult(trades=[], skipped_duplicates=0, open_positions=0)
 
     def fake_write_trades(
-        path: Path, sheet_name: str, input_trades: list[CanonicalTrade], ticker_prompt: Any = None
+        path: Path, table_name: str, input_trades: list[CanonicalTrade], ticker_prompt: Any = None
     ) -> WriteResult:
         return WriteResult(rows_written=0, failed_conversions=[])
 
@@ -135,7 +135,7 @@ def test_run_pipeline_uses_explicit_account_when_provided(monkeypatch: Any, tmp_
         broker="fake",
         csv_path=csv_path,
         workbook_path=workbook_path,
-        sheet_name="Trades",
+        table_name="Trades",
         account="Roth IRA",
     )
 
@@ -157,7 +157,7 @@ def test_run_pipeline_defaults_account_to_broker_when_omitted(monkeypatch: Any, 
         return MatchResult(trades=[], skipped_duplicates=0, open_positions=0)
 
     def fake_write_trades(
-        path: Path, sheet_name: str, input_trades: list[CanonicalTrade], ticker_prompt: Any = None
+        path: Path, table_name: str, input_trades: list[CanonicalTrade], ticker_prompt: Any = None
     ) -> WriteResult:
         return WriteResult(rows_written=0, failed_conversions=[])
 
@@ -166,7 +166,7 @@ def test_run_pipeline_defaults_account_to_broker_when_omitted(monkeypatch: Any, 
     monkeypatch.setattr(main, "write_trades_detailed", fake_write_trades)
 
     main.run_pipeline(
-        broker="fake", csv_path=csv_path, workbook_path=workbook_path, sheet_name="Trades"
+        broker="fake", csv_path=csv_path, workbook_path=workbook_path, table_name="Trades"
     )
 
     assert captured["account"] == "fake"
@@ -181,7 +181,7 @@ def test_main_parses_cli_arguments(monkeypatch: Any, capsys: pytest.CaptureFixtu
         broker: str,
         csv_path: Path,
         workbook_path: Path,
-        sheet_name: str,
+        table_name: str,
         account: str | None = None,
         ticker_prompt: Any = None,
         symbol_prompt: Any = None,
@@ -189,7 +189,7 @@ def test_main_parses_cli_arguments(monkeypatch: Any, capsys: pytest.CaptureFixtu
         assert broker == "fidelity"
         assert csv_path == tmp_path / "input.csv"
         assert workbook_path == tmp_path / "ledger.xlsx"
-        assert sheet_name == "Trades"
+        assert table_name == "Trades"
         assert account is None
         assert ticker_prompt is None
         assert symbol_prompt is None
@@ -199,7 +199,7 @@ def test_main_parses_cli_arguments(monkeypatch: Any, capsys: pytest.CaptureFixtu
     monkeypatch.setattr(main, "_stdin_is_interactive", lambda: False)
 
     exit_code = main.main(
-        ["fidelity", str(csv_path), "--workbook", str(workbook_path), "--sheet", "Trades"]
+        ["fidelity", str(csv_path), "--workbook", str(workbook_path), "--table", "Trades"]
     )
 
     assert exit_code == 0
@@ -220,7 +220,7 @@ def test_main_passes_explicit_account_argument(monkeypatch: Any, tmp_path: Path)
         broker: str,
         csv_path: Path,
         workbook_path: Path,
-        sheet_name: str,
+        table_name: str,
         account: str | None = None,
         ticker_prompt: Any = None,
         symbol_prompt: Any = None,
@@ -237,7 +237,7 @@ def test_main_passes_explicit_account_argument(monkeypatch: Any, tmp_path: Path)
             str(csv_path),
             "--workbook",
             str(workbook_path),
-            "--sheet",
+            "--table",
             "Trades",
             "--account",
             "Roth IRA",
@@ -248,12 +248,20 @@ def test_main_passes_explicit_account_argument(monkeypatch: Any, tmp_path: Path)
     assert captured["account"] == "Roth IRA"
 
 
-def test_main_requires_sheet_argument(tmp_path: Path) -> None:
+def test_main_requires_table_argument(tmp_path: Path) -> None:
     csv_path = tmp_path / "input.csv"
     workbook_path = tmp_path / "ledger.xlsx"
 
     with pytest.raises(SystemExit):
         main.main(["fidelity", str(csv_path), "--workbook", str(workbook_path)])
+
+
+def test_main_rejects_unsupported_sheet_flag(tmp_path: Path) -> None:
+    csv_path = tmp_path / "input.csv"
+    workbook_path = tmp_path / "ledger.xlsx"
+
+    with pytest.raises(SystemExit):
+        main.main(["fidelity", str(csv_path), "--workbook", str(workbook_path), "--sheet", "Trades"])
 
 
 def test_main_skips_prompt_when_no_prompt_flag_is_set(
@@ -268,7 +276,7 @@ def test_main_skips_prompt_when_no_prompt_flag_is_set(
         broker: str,
         csv_path: Path,
         workbook_path: Path,
-        sheet_name: str,
+        table_name: str,
         account: str | None = None,
         ticker_prompt: Any = None,
         symbol_prompt: Any = None,
@@ -281,7 +289,7 @@ def test_main_skips_prompt_when_no_prompt_flag_is_set(
     monkeypatch.setattr(main, "_stdin_is_interactive", lambda: True)
 
     exit_code = main.main(
-        ["fidelity", str(csv_path), "--workbook", str(workbook_path), "--sheet", "Trades", "--no-prompt"]
+        ["fidelity", str(csv_path), "--workbook", str(workbook_path), "--table", "Trades", "--no-prompt"]
     )
 
     assert exit_code == 0
@@ -301,7 +309,7 @@ def test_main_enables_prompt_when_stdin_is_interactive(
         broker: str,
         csv_path: Path,
         workbook_path: Path,
-        sheet_name: str,
+        table_name: str,
         account: str | None = None,
         ticker_prompt: Any = None,
         symbol_prompt: Any = None,
@@ -313,7 +321,7 @@ def test_main_enables_prompt_when_stdin_is_interactive(
     monkeypatch.setattr(main, "run_pipeline", fake_run_pipeline)
     monkeypatch.setattr(main, "_stdin_is_interactive", lambda: True)
 
-    exit_code = main.main(["fidelity", str(csv_path), "--workbook", str(workbook_path), "--sheet", "Trades"])
+    exit_code = main.main(["fidelity", str(csv_path), "--workbook", str(workbook_path), "--table", "Trades"])
 
     assert exit_code == 0
     assert captured["ticker_prompt"] is main._prompt_for_replacement_ticker
@@ -329,7 +337,7 @@ def test_main_reports_conversion_failure_details(monkeypatch: Any, capsys: pytes
         broker: str,
         csv_path: Path,
         workbook_path: Path,
-        sheet_name: str,
+        table_name: str,
         account: str | None = None,
         ticker_prompt: Any = None,
         symbol_prompt: Any = None,
@@ -369,7 +377,7 @@ def test_main_reports_conversion_failure_details(monkeypatch: Any, capsys: pytes
 
     monkeypatch.setattr(main, "run_pipeline", fake_run_pipeline)
 
-    exit_code = main.main(["fidelity", str(csv_path), "--workbook", str(workbook_path), "--sheet", "Trades"])
+    exit_code = main.main(["fidelity", str(csv_path), "--workbook", str(workbook_path), "--table", "Trades"])
 
     assert exit_code == 0
     output = capsys.readouterr().out
@@ -389,7 +397,7 @@ def test_main_reports_symbol_parse_failure_details(
         broker: str,
         csv_path: Path,
         workbook_path: Path,
-        sheet_name: str,
+        table_name: str,
         account: str | None = None,
         ticker_prompt: Any = None,
         symbol_prompt: Any = None,
@@ -410,7 +418,7 @@ def test_main_reports_symbol_parse_failure_details(
 
     monkeypatch.setattr(main, "run_pipeline", fake_run_pipeline)
 
-    exit_code = main.main(["fidelity", str(csv_path), "--workbook", str(workbook_path), "--sheet", "Trades"])
+    exit_code = main.main(["fidelity", str(csv_path), "--workbook", str(workbook_path), "--table", "Trades"])
 
     assert exit_code == 0
     output = capsys.readouterr().out

@@ -32,7 +32,7 @@ def run_pipeline(
     broker: str,
     csv_path: Path,
     workbook_path: Path,
-    sheet_name: str,
+    table_name: str,
     account: str | None = None,
     ticker_prompt: Callable[[str, CanonicalTrade], str | None] | None = None,
     symbol_prompt: Callable[[str, str], str | None] | None = None,
@@ -48,7 +48,7 @@ def run_pipeline(
     match_result = match_trades_with_summary(parse_result.events)
     write_result = write_trades_detailed(
         workbook_path,
-        sheet_name,
+        table_name,
         match_result.trades,
         ticker_prompt=ticker_prompt,
     )
@@ -76,9 +76,9 @@ def build_parser() -> argparse.ArgumentParser:
         help="Path to the Excel workbook containing tbl_trades",
     )
     parser.add_argument(
-        "--sheet",
+        "--table",
         required=True,
-        help="Name of the worksheet inside the workbook that contains the tbl_trades table",
+        help="Name of the Excel table inside the workbook that will receive imported trades",
     )
     parser.add_argument(
         "--account",
@@ -136,14 +136,14 @@ def main(argv: Sequence[str] | None = None) -> int:
         broker=args.broker,
         csv_path=args.csv_path,
         workbook_path=args.workbook,
-        sheet_name=args.sheet,
+        table_name=args.table,
         account=args.account,
         ticker_prompt=ticker_prompt,
         symbol_prompt=symbol_prompt,
     )
     open_label = "open position" if result.open_positions == 1 else "open positions"
     print(
-        f"Ingested {result.rows_ingested} trade rows to {args.workbook} [{args.sheet}]; "
+        f"Ingested {result.rows_ingested} trade rows to {args.workbook} [{args.table}]; "
         f"skipped {result.rows_skipped} duplicate rows; "
         f"left {result.open_positions} {open_label} unmatched"
     )

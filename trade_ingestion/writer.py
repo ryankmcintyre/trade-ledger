@@ -131,24 +131,24 @@ class WriteResult:
 
 def write_trades(
     workbook_path: Path,
-    sheet_name: str,
+    table_name: str,
     trades: list[CanonicalTrade],
     ticker_prompt: Callable[[str, CanonicalTrade], str | None] | None = None,
 ) -> int:
-    """Append trades to tbl_trades and return the number of rows written."""
-    return write_trades_detailed(workbook_path, sheet_name, trades, ticker_prompt=ticker_prompt).rows_written
+    """Append trades to the named Excel table and return the number of rows written."""
+    return write_trades_detailed(workbook_path, table_name, trades, ticker_prompt=ticker_prompt).rows_written
 
 
 def write_trades_detailed(
     workbook_path: Path,
-    sheet_name: str,
+    table_name: str,
     trades: list[CanonicalTrade],
     ticker_prompt: Callable[[str, CanonicalTrade], str | None] | None = None,
 ) -> WriteResult:
     workbook, app, was_open = _open_workbook(workbook_path)
     try:
-        sheet = _find_sheet(workbook, sheet_name)
-        table = _find_table(sheet, TABLE_NAME)
+        table = _find_table(workbook, table_name)
+        sheet = _find_sheet_for_table(workbook, table, table_name)
         headers = _table_headers(table)
         existing_keys = _existing_dedup_keys(table, headers)
 
@@ -353,12 +353,11 @@ def _is_resolved_symbol(value: Any) -> bool:
     return not text.startswith("#")
 
 
-def read_existing_lot_ids(workbook_path: Path, sheet_name: str) -> set[str]:
+def read_existing_lot_ids(workbook_path: Path, table_name: str) -> set[str]:
     """DEPRECATED: read existing composite dedup keys as pipe-delimited strings."""
     workbook, app, was_open = _open_workbook(workbook_path)
     try:
-        sheet = _find_sheet(workbook, sheet_name)
-        table = _find_table(sheet, TABLE_NAME)
+        table = _find_table(workbook, table_name)
         headers = _table_headers(table)
         return _existing_dedup_keys(table, headers)
     finally:
@@ -626,33 +625,45 @@ def _find_open_book(resolved_path: str) -> Any | None:
     return None
 
 
-def _find_table(sheet: Any, table_name: str) -> Any:
-    try:
-        return _call_with_com_retry(lambda: sheet.api.ListObjects(table_name))
-    except ComRetryExhaustedError:
-        # Exhausted retries on a transient COM error — surface that clearly
-        # rather than masking it as "table not found".
-        raise
-    except Exception as exc:
-        raise ValueError(
-            f"Could not find table {table_name!r} on worksheet {sheet.name!r}"
-        ) from exc
-
-
-def _find_sheet(workbook: Any, sheet_name: str) -> Any:
+def _find_table(workbook: Any, table_name: str) -> Any:
     def _search() -> Any:
-        available: list[str] = []
+        available_sheets: list[str] = []
         for sheet in workbook.sheets:
             name = str(sheet.name)
-            available.append(name)
-            if name.casefold() == sheet_name.casefold():
-                return sheet
-        known = ", ".join(repr(name) for name in available) or "none"
-        raise ValueError(
-            f"Could not find worksheet {sheet_name!r} in the workbook. Available worksheets: {known}"
-        )
+            available_sheets.append(name)
+            try:
+                return _call_with_com_retry(lambda sheet=sheet: sheet.api.ListObjects(table_name))
+            except KeyError:
+                continue
+            except ValueError:
+                continue
+            except ComRetryExhaustedError:
+                # Exhausted retries on a transient COM error — surface that clearly
+                # rather than masking it as "table not found".
+                raise
+            except Exception as exc:
+                # A sheet without the requested table may raise a COM-level not-found
+                # error; keep searching the rest of the workbook and raise a clear
+                # message only when no sheet exposes the named table.
+                if "not found" in str(exc).lower() or "does not exist" in str(exc).lower():
+                    continue
+                raise
+
+        known = ", ".join(repr(name) for name in available_sheets) or "none"
+        raise ValueError(f"Could not find table {table_name!r} in the workbook. Available sheets: {known}")
 
     return _call_with_com_retry(_search)
+
+
+def _find_sheet_for_table(workbook: Any, table: Any, table_name: str) -> Any:
+    for sheet in workbook.sheets:
+        if getattr(sheet, "api", None) is not None:
+            try:
+                if sheet.api.ListObjects(table_name) is table:
+                    return sheet
+            except Exception:
+                continue
+    raise ValueError(f"Could not find a worksheet containing table {table_name!r}")
 
 
 def _table_headers(table: Any) -> list[str]:
