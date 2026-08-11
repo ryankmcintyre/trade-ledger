@@ -12,6 +12,7 @@ from constants import (
     DEDUP_COLUMNS,
     FIELD_TO_COLUMN,
     LINKED_DATA_TYPE_CULTURE,
+    STOCK_FIELD_NAME,
     STOCK_SYMBOL_COLUMN,
     STOCKS_SERVICE_ID,
     TABLE_NAME,
@@ -158,10 +159,18 @@ def write_trades_detailed(
                 header_positions[col_name] = headers.index(col_name) + 1
 
         pending: list[CanonicalTrade] = []
+        updated_rows = 0
         for trade in trades:
+            update_row_index = _find_existing_row_to_update(table, headers, trade)
+            if update_row_index is not None:
+                _update_existing_trade_row(sheet, table, headers, header_positions, update_row_index, trade)
+                updated_rows += 1
+                continue
+
             key = _make_dedup_key(trade, headers)
             if key not in existing_keys:
                 pending.append(trade)
+                existing_keys.add(key)
 
         insertion_position = _last_populated_row_position(table, headers) + 1
         stock_column = header_positions.get(FIELD_TO_COLUMN["stock"])
@@ -215,7 +224,7 @@ def write_trades_detailed(
 
         _call_with_com_retry(workbook.save)
         return WriteResult(
-            rows_written=len(pending),
+            rows_written=len(pending) + updated_rows,
             failed_conversions=failed_conversions,
             conversion_failures=conversion_failures,
         )
@@ -373,6 +382,146 @@ def _make_dedup_key(trade: CanonicalTrade, headers: list[str]) -> str:
     return "|".join(parts)
 
 
+def _find_existing_row_to_update(table: Any, headers: list[str], trade: CanonicalTrade) -> int | None:
+    """Return the 1-based table row index for a matching open row to update.
+
+    Close-only trades can be reconciled to an existing open position in the table
+    even when the incoming trade has no Open Date value of its own; in that case we
+    fall back to matching on the row's stock/side/quantity/account values.
+    """
+    if trade.close_date is None and trade.exit_price is None:
+        return None
+
+    data_range = getattr(table, "DataBodyRange", None)
+    rows = _normalize_table_rows(data_range.Value, len(headers))
+    if not rows:
+        return None
+
+    candidates: list[int] = []
+    col_indices = {col_name: headers.index(col_name) if col_name in headers else None for col_name in DEDUP_COLUMNS}
+    symbol_index = headers.index(STOCK_SYMBOL_COLUMN) if STOCK_SYMBOL_COLUMN in headers else None
+    account_index = headers.index("Account") if "Account" in headers else None
+
+    for row_index, row in enumerate(rows):
+        if _row_has_close_values(row, headers):
+            continue
+
+        if not _row_matches_trade(row, headers, trade, col_indices, symbol_index, account_index):
+            continue
+
+        candidates.append(row_index + 1)
+
+    # Collect all potential matches before raising so an ambiguous reconciliation
+    # is surfaced consistently rather than silently falling back to appending.
+    if len(candidates) > 1:
+        context = trade.trade_id or trade.lot_id or trade.symbol or "trade"
+        raise ValueError(
+            f"Multiple existing rows matched close trade '{context}'; cannot reconcile automatically"
+        )
+
+    return candidates[0] if candidates else None
+
+
+def _row_has_close_values(row: list[Any], headers: list[str]) -> bool:
+    close_index = headers.index("Close Date") if "Close Date" in headers else None
+    exit_index = headers.index("Exit Price") if "Exit Price" in headers else None
+    if close_index is not None and close_index < len(row) and row[close_index] not in (None, ""):
+        return True
+    if exit_index is not None and exit_index < len(row) and row[exit_index] not in (None, ""):
+        return True
+    return False
+
+
+def _row_matches_trade(
+    row: list[Any],
+    headers: list[str],
+    trade: CanonicalTrade,
+    col_indices: dict[str, int | None],
+    symbol_index: int | None,
+    account_index: int | None,
+) -> bool:
+    stock_value = _row_ticker(row, col_indices.get("Stock"), symbol_index)
+    trade_stock_value = str(trade.stock or trade.underlying or "").strip()
+    if stock_value and trade_stock_value and stock_value != trade_stock_value:
+        return False
+
+    side_index = col_indices.get("B/S")
+    if side_index is not None and side_index < len(row):
+        row_side = row[side_index]
+        if row_side not in (None, "") and str(row_side).strip() != str(trade.side or "").strip():
+            return False
+
+    quantity_index = col_indices.get("C")
+    if quantity_index is not None and quantity_index < len(row):
+        row_quantity = row[quantity_index]
+        if row_quantity not in (None, ""):
+            try:
+                row_quantity_value = float(row_quantity)
+            except (TypeError, ValueError):
+                return False
+            if abs(row_quantity_value - float(trade.quantity)) > 1e-9:
+                return False
+
+    if account_index is not None and account_index < len(row):
+        row_account = row[account_index]
+        if row_account not in (None, "") and str(row_account).strip() != str(trade.account or "").strip():
+            return False
+
+    if trade.open_date is not None:
+        open_date_index = headers.index("Open Date") if "Open Date" in headers else None
+        if open_date_index is not None and open_date_index < len(row):
+            row_open_date_value = row[open_date_index]
+            if row_open_date_value in (None, ""):
+                return False
+            if isinstance(row_open_date_value, (int, float)):
+                row_open_date = _excel_serial_to_date(float(row_open_date_value))
+            elif hasattr(row_open_date_value, "date") and callable(getattr(row_open_date_value, "date", None)):
+                row_open_date = row_open_date_value.date()
+            else:
+                row_open_date = None
+            if row_open_date is None:
+                return False
+            if row_open_date != trade.open_date:
+                return False
+
+    return True
+
+
+def _update_existing_trade_row(
+    sheet: Any,
+    table: Any,
+    headers: list[str],
+    header_positions: dict[str, int],
+    row_index: int,
+    trade: CanonicalTrade,
+) -> None:
+    list_row = _call_with_com_retry(lambda: table.ListRows[row_index])
+    base_row = _call_with_com_retry(lambda: list_row.Range.Row)
+    base_column = _call_with_com_retry(lambda: list_row.Range.Column)
+
+    for field_name, col_name in FIELD_TO_COLUMN.items():
+        if col_name not in header_positions:
+            continue
+        if field_name == STOCK_FIELD_NAME:
+            # NOTE: preserve the existing Excel Stocks linked-data cell instead of
+            # NOTE: overwriting it with plain text during in-place close reconciliation.
+            continue
+        value = getattr(trade, field_name, None)
+        if value is None:
+            continue
+        cell_index = header_positions[col_name]
+
+        def _write_cell(
+            base_row: int = base_row,
+            base_column: int = base_column,
+            cell_index: int = cell_index,
+            value: Any = value,
+        ) -> None:
+            sheet.range((base_row, base_column + cell_index - 1)).value = value
+
+        _call_with_com_retry(_write_cell)
+
+
 def _existing_dedup_keys(table: Any, headers: list[str]) -> set[str]:
     """Read existing rows and build composite dedup keys."""
     values: set[str] = set()
@@ -520,6 +669,8 @@ def _table_headers(table: Any) -> list[str]:
 
 
 def _normalize_table_rows(raw_value: Any, width: int) -> list[list[Any]]:
+    if raw_value in (None, ""):
+        return []
     if isinstance(raw_value, tuple):
         raw_value = [list(item) if isinstance(item, tuple) else item for item in raw_value]
     if isinstance(raw_value, list):

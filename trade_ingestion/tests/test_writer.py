@@ -81,6 +81,14 @@ class FakeXlwingsCell:
     @value.setter
     def value(self, value: Any) -> None:
         self._row.values[self._column_index] = value
+        if self._row.table.DataBodyRange.Value is not None:
+            data_rows = self._row.table.DataBodyRange.Value
+            if isinstance(data_rows, list) and self._row.Row >= 2:
+                row_index = self._row.Row - 2
+                if row_index < len(data_rows):
+                    row_values = data_rows[row_index]
+                    if isinstance(row_values, list):
+                        row_values[self._column_index - 1] = value
 
 
 class FakeRowRange:
@@ -95,7 +103,11 @@ class FakeRowRange:
 
 
 class FakeListRow:
-    def __init__(self, table: "FakeTable", position: int) -> None:
+    def __init__(self, table: "FakeTable", position: int, existing_row: FakeRowRange | None = None) -> None:
+        if existing_row is not None:
+            self.Range = existing_row
+            return
+
         rows = table.DataBodyRange.Value
         if rows is None:
             rows = []
@@ -123,6 +135,15 @@ class FakeListRows:
     def Count(self) -> int:
         return len(self.table.DataBodyRange.Value or [])
 
+    def __getitem__(self, index: int) -> FakeListRow:
+        if index < 1 or index > self.Count:
+            raise IndexError(index)
+        row_number = index + 1
+        row = self.table.rows_by_number.get(row_number)
+        if row is None:
+            raise IndexError(index)
+        return FakeListRow(self.table, index, existing_row=row)
+
     def Add(self, Position: int | None = None) -> FakeListRow:
         position = Position if Position is not None else self.Count + 1
         return FakeListRow(self.table, position)
@@ -140,6 +161,10 @@ class FakeTable:
         self.ListRows = FakeListRows(self)
         self.added_rows: list[dict[int, Any]] = []
         self.rows_by_number: dict[int, FakeRowRange] = {}
+        for row_index, row in enumerate(rows or [], start=2):
+            row_range = FakeRowRange(self, row_index)
+            row_range.values = {index + 1: value for index, value in enumerate(row)}
+            self.rows_by_number[row_index] = row_range
 
 
 class FakeSheetApi:
@@ -410,6 +435,90 @@ def test_write_trades_dedup_by_composite_key(monkeypatch: Any, tmp_path: Path) -
 
     assert written == 0
     assert len(table.added_rows) == 0
+
+
+def test_write_trades_updates_existing_open_row_for_close_trade(monkeypatch: Any, tmp_path: Path) -> None:
+    workbook_path = tmp_path / "ledger.xlsx"
+    workbook_path.write_text("placeholder", encoding="utf-8")
+
+    headers = ["Stock", "Stock Symbol", "Open Date", "Exp Date", "Call or Put", "B/S",
+               "Strike Price", "Premium", "C", "Fees", "Exit Price", "Close Date", "Status", "Account"]
+    existing_rows = [["SPY", "SPY", date(2024, 1, 2), date(2024, 1, 19), "C", "B",
+                      450.0, 2.0, 1.0, None, None, None, "Open", "Fidelity"]]
+    table = FakeTable(headers, existing_rows)
+    app = FakeApp([])
+    book = FakeBook(str(workbook_path.resolve()), table, app)
+    app.books.append(book)
+
+    monkeypatch.setattr(writer, "xw", FakeXw(app))
+
+    trade = _trade(open_date=None, quantity=1.0, side="B")
+    trade.status = "Closed"
+    trade.exit_price = 3.0
+    trade.close_date = date(2024, 1, 5)
+
+    written = writer.write_trades(workbook_path, SHEET_NAME, [trade])
+
+    assert written == 1
+    assert len(table.added_rows) == 0
+    updated_row = table.DataBodyRange.Value[0]
+    assert updated_row[1] == "SPY"
+    assert updated_row[2] == date(2024, 1, 2)
+    assert updated_row[10] == 3.0
+    assert updated_row[11] == date(2024, 1, 5)
+    assert updated_row[12] == "Closed"
+
+
+def test_write_trades_preserves_existing_stock_cell_when_updating_row(monkeypatch: Any, tmp_path: Path) -> None:
+    workbook_path = tmp_path / "ledger.xlsx"
+    workbook_path.write_text("placeholder", encoding="utf-8")
+
+    headers = ["Stock", "Stock Symbol", "Open Date", "Exp Date", "Call or Put", "B/S",
+               "Strike Price", "Premium", "C", "Fees", "Exit Price", "Close Date", "Status", "Account"]
+    existing_rows = [["SPY-LINKED", "SPY", date(2024, 1, 2), date(2024, 1, 19), "C", "B",
+                      450.0, 2.0, 1.0, None, None, None, "Open", "Fidelity"]]
+    table = FakeTable(headers, existing_rows)
+    app = FakeApp([])
+    book = FakeBook(str(workbook_path.resolve()), table, app)
+    app.books.append(book)
+
+    monkeypatch.setattr(writer, "xw", FakeXw(app))
+
+    trade = _trade(open_date=None, quantity=1.0, side="B")
+    trade.status = "Closed"
+    trade.exit_price = 3.0
+    trade.close_date = date(2024, 1, 5)
+
+    written = writer.write_trades(workbook_path, SHEET_NAME, [trade])
+
+    assert written == 1
+    assert len(table.added_rows) == 0
+    updated_row = table.DataBodyRange.Value[0]
+    assert updated_row[0] == "SPY-LINKED"
+
+
+def test_write_trades_rejects_ambiguous_close_match(monkeypatch: Any, tmp_path: Path) -> None:
+    workbook_path = tmp_path / "ledger.xlsx"
+    workbook_path.write_text("placeholder", encoding="utf-8")
+
+    headers = ["Stock", "Stock Symbol", "Open Date", "B/S", "C", "Account"]
+    existing_rows = [
+        ["SPY", "SPY", date(2024, 1, 2), "B", 1.0, "Fidelity"],
+        ["SPY", "SPY", date(2024, 1, 3), "B", 1.0, "Fidelity"],
+    ]
+    table = FakeTable(headers, existing_rows)
+    app = FakeApp([])
+    book = FakeBook(str(workbook_path.resolve()), table, app)
+    app.books.append(book)
+
+    monkeypatch.setattr(writer, "xw", FakeXw(app))
+
+    trade = _trade(open_date=None, quantity=1.0, side="B")
+    trade.exit_price = 3.0
+    trade.close_date = date(2024, 1, 5)
+
+    with pytest.raises(ValueError, match="Multiple existing rows matched close trade"):
+        writer.write_trades(workbook_path, SHEET_NAME, [trade])
 
 
 def test_write_trades_skips_none_values(monkeypatch: Any, tmp_path: Path) -> None:

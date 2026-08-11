@@ -2,6 +2,8 @@ FIDELITY_BROKER_NAME = "Fidelity"
 
 TABLE_NAME = "tbl_trades"
 
+STOCK_FIELD_NAME = "stock"
+
 # Mapping from CanonicalTrade field names to workbook column headers.
 FIELD_TO_COLUMN: dict[str, str] = {
     "stock": "Stock",
