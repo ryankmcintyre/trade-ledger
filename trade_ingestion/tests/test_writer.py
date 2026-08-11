@@ -520,9 +520,9 @@ def test_write_trades_reconciles_close_to_correct_row_among_matching_strikes(
                "Strike Price", "Premium", "C", "Fees", "Exit Price", "Close Date",
                "Status", "Account"]
     existing_rows = [
-        ["SPY", "SPY", date(2024, 1, 2), date(2024, 1, 19), "C", "B",
+        ["SPY", "SPY", date(2024, 1, 2), date(2024, 1, 19), "Call", "B",
          460.0, 2.0, 1.0, None, None, None, "Open", "Fidelity"],
-        ["SPY", "SPY", date(2024, 1, 2), date(2024, 1, 19), "C", "B",
+        ["SPY", "SPY", date(2024, 1, 2), date(2024, 1, 19), "Call", "B",
          450.0, 2.0, 1.0, None, None, None, "Open", "Fidelity"],
     ]
     table = FakeTable(headers, existing_rows)
@@ -615,7 +615,7 @@ def test_write_trades_updates_existing_open_row_for_close_trade(monkeypatch: Any
 
     headers = ["Stock", "Stock Symbol", "Open Date", "Exp Date", "Call or Put", "B/S",
                "Strike Price", "Premium", "C", "Fees", "Exit Price", "Close Date", "Status", "Account"]
-    existing_rows = [["SPY", "SPY", date(2024, 1, 2), date(2024, 1, 19), "C", "B",
+    existing_rows = [["SPY", "SPY", date(2024, 1, 2), date(2024, 1, 19), "Call", "B",
                       450.0, 2.0, 1.0, None, None, None, "Open", "Fidelity"]]
     table = FakeTable(headers, existing_rows)
     app = FakeApp([])
@@ -846,6 +846,112 @@ def test_write_trades_skips_reprocessed_partial_close_split(monkeypatch: Any, tm
     assert table.DataBodyRange.Value[0][8] == 101.0
 
 
+def test_write_trades_distinct_equal_quantity_closes_do_not_collide(
+    monkeypatch: Any, tmp_path: Path
+) -> None:
+    """Two distinct closing tickets of the same quantity against the same open
+    lot, closed on different dates/prices, must both be reconciled instead of
+    the second being treated as a duplicate of the first."""
+    workbook_path = tmp_path / "ledger.xlsx"
+    workbook_path.write_text("placeholder", encoding="utf-8")
+
+    headers = ["Stock", "Stock Symbol", "Open Date", "Exp Date", "Call or Put", "B/S",
+               "Strike Price", "Premium", "C", "Fees", "Exit Price", "Close Date", "Status", "Account"]
+    existing_rows = [["XOMX", "XOMX", date(2026, 6, 3), None, None, "C",
+                      None, 40.53, 300.0, None, None, None, "Open", "BrokerageLink"]]
+    table = FakeTable(headers, existing_rows)
+    app = FakeApp([])
+    book = FakeBook(str(workbook_path.resolve()), table, app)
+    app.books.append(book)
+
+    monkeypatch.setattr(writer, "xw", FakeXw(app))
+
+    def _close(lot_id: str, exit_price: float, close_date: date) -> CanonicalTrade:
+        return CanonicalTrade(
+            lot_id=lot_id,
+            trade_id="",
+            underlying="XOMX",
+            symbol="XOMX",
+            open_date=None,
+            exp_date=None,
+            call_or_put=None,
+            side="C",
+            strike=None,
+            stock_price_open=None,
+            premium=None,
+            quantity=50.0,
+            fees=None,
+            exit_price=exit_price,
+            close_date=close_date,
+            account="BrokerageLink",
+            stock="XOMX",
+            status="Closed",
+        )
+
+    first_close = _close("close-1", 46.4615, date(2026, 8, 10))
+    second_close = _close("close-2", 45.0, date(2026, 8, 11))
+
+    written = writer.write_trades(workbook_path, TABLE_NAME, [first_close, second_close])
+
+    # Both closes must be reconciled as their own split rows rather than the
+    # second being skipped as a false-positive duplicate of the first.
+    assert written == 2
+    assert len(table.added_rows) == 2
+    assert table.added_rows[0][11] == 46.4615  # Exit Price
+    assert table.added_rows[1][11] == 45.0  # Exit Price
+    # 300 - 50 - 50 = 200 shares remain open.
+    assert table.DataBodyRange.Value[0][8] == 200.0
+
+
+def test_write_trades_reimporting_fully_closed_ticket_does_not_duplicate(
+    monkeypatch: Any, tmp_path: Path
+) -> None:
+    """Re-importing a closing ticket that already fully closed an existing open
+    row (no remaining open quantity) in a previous run must not append a
+    duplicate row, even though the now-closed row no longer qualifies as an
+    open candidate."""
+    workbook_path = tmp_path / "ledger.xlsx"
+    workbook_path.write_text("placeholder", encoding="utf-8")
+
+    headers = ["Stock", "Stock Symbol", "Open Date", "Exp Date", "Call or Put", "B/S",
+               "Strike Price", "Premium", "C", "Fees", "Exit Price", "Close Date", "Status", "Account"]
+    # The row was already fully closed in place by a prior run.
+    existing_rows = [["XOMX", "XOMX", date(2026, 6, 3), None, None, "C",
+                      None, 40.53, 50.0, None, 46.4615, date(2026, 8, 10), "Closed", "BrokerageLink"]]
+    table = FakeTable(headers, existing_rows)
+    app = FakeApp([])
+    book = FakeBook(str(workbook_path.resolve()), table, app)
+    app.books.append(book)
+
+    monkeypatch.setattr(writer, "xw", FakeXw(app))
+
+    duplicate_close = CanonicalTrade(
+        lot_id="close-1",
+        trade_id="",
+        underlying="XOMX",
+        symbol="XOMX",
+        open_date=None,
+        exp_date=None,
+        call_or_put=None,
+        side="C",
+        strike=None,
+        stock_price_open=None,
+        premium=None,
+        quantity=50.0,
+        fees=None,
+        exit_price=46.4615,
+        close_date=date(2026, 8, 10),
+        account="BrokerageLink",
+        stock="XOMX",
+        status="Closed",
+    )
+
+    written = writer.write_trades(workbook_path, TABLE_NAME, [duplicate_close])
+
+    assert written == 0
+    assert len(table.added_rows) == 0
+
+
 def test_write_trades_prefers_exact_quantity_match_over_partial_candidate(
     monkeypatch: Any, tmp_path: Path
 ) -> None:
@@ -912,7 +1018,7 @@ def test_write_trades_preserves_existing_stock_cell_when_updating_row(monkeypatc
 
     headers = ["Stock", "Stock Symbol", "Open Date", "Exp Date", "Call or Put", "B/S",
                "Strike Price", "Premium", "C", "Fees", "Exit Price", "Close Date", "Status", "Account"]
-    existing_rows = [["SPY-LINKED", "SPY", date(2024, 1, 2), date(2024, 1, 19), "C", "B",
+    existing_rows = [["SPY-LINKED", "SPY", date(2024, 1, 2), date(2024, 1, 19), "Call", "B",
                       450.0, 2.0, 1.0, None, None, None, "Open", "Fidelity"]]
     table = FakeTable(headers, existing_rows)
     app = FakeApp([])
@@ -1039,6 +1145,112 @@ def test_write_trades_filters_fifo_candidates_by_option_identifiers(
     assert split_row[5] == "Call"  # Call or Put
     assert split_row[9] == 1.0  # C
     assert split_row[13] == "Closed"
+
+
+def test_write_trades_filters_by_option_identifiers_before_exact_quantity(
+    monkeypatch: Any, tmp_path: Path
+) -> None:
+    """A wrong-expiry row that happens to hold the incoming close's exact
+    quantity must never be preferred over the correct contract just because
+    it satisfies the exact-quantity check first; option-identifier filtering
+    must be applied before exact-quantity/uniqueness selection."""
+    workbook_path = tmp_path / "ledger.xlsx"
+    workbook_path.write_text("placeholder", encoding="utf-8")
+
+    headers = ["Stock", "Stock Symbol", "Open Date", "Exp Date", "Call or Put", "B/S",
+               "Strike Price", "Premium", "C", "Fees", "Exit Price", "Close Date", "Status", "Account"]
+    existing_rows = [
+        # Wrong expiry, but exact-quantity match for the incoming close.
+        ["SPY", "SPY", date(2024, 1, 1), date(2024, 1, 12), "Call", "B",
+         450.0, 2.0, 1.0, None, None, None, "Open", "Fidelity"],
+        # Correct contract, but a larger quantity than the incoming close.
+        ["SPY", "SPY", date(2024, 1, 2), date(2024, 1, 19), "Call", "B",
+         450.0, 2.0, 2.0, None, None, None, "Open", "Fidelity"],
+    ]
+    table = FakeTable(headers, existing_rows)
+    app = FakeApp([])
+    book = FakeBook(str(workbook_path.resolve()), table, app)
+    app.books.append(book)
+
+    monkeypatch.setattr(writer, "xw", FakeXw(app))
+
+    close = CanonicalTrade(
+        lot_id="close-1",
+        trade_id="",
+        underlying="SPY",
+        symbol="SPY 240119C00450000",
+        open_date=None,
+        exp_date=date(2024, 1, 19),
+        call_or_put="Call",
+        side="B",
+        strike=450.0,
+        stock_price_open=None,
+        premium=None,
+        quantity=1.0,
+        fees=None,
+        exit_price=3.0,
+        close_date=date(2024, 1, 5),
+        account="Fidelity",
+        stock="SPY",
+        status="Closed",
+    )
+
+    written = writer.write_trades(workbook_path, TABLE_NAME, [close])
+
+    assert written == 1
+    updated_rows = table.DataBodyRange.Value
+    # The wrong-expiry (but exact-quantity) row is untouched.
+    assert updated_rows[0][8] == 1.0
+    assert updated_rows[0][12] == "Open"
+    # The correct-contract row absorbed the partial close and was split.
+    assert updated_rows[1][8] == 1.0
+    assert updated_rows[1][12] == "Open"
+    split_row = table.added_rows[0]
+    assert split_row[4] == date(2024, 1, 19)  # Exp Date
+
+
+def test_write_trades_fifo_fallback_uses_real_date_objects(
+    monkeypatch: Any, tmp_path: Path
+) -> None:
+    """FIFO fallback must recognize plain `datetime.date` Open Date values
+    (not only Excel serials or `datetime.datetime`) and pick the earliest one,
+    rather than treating every row as `date.max` and falling back to table
+    order."""
+    workbook_path = tmp_path / "ledger.xlsx"
+    workbook_path.write_text("placeholder", encoding="utf-8")
+
+    headers = ["Stock", "Stock Symbol", "Open Date", "B/S", "C", "Account"]
+    existing_rows = [
+        # Listed first in the table, but opened later — must lose FIFO to the
+        # second row despite being earlier in table order.
+        ["SPY", "SPY", date(2024, 6, 10), "B", 100.0, "Fidelity"],
+        ["SPY", "SPY", date(2024, 1, 1), "B", 100.0, "Fidelity"],
+    ]
+    table = FakeTable(headers, existing_rows)
+    app = FakeApp([])
+    book = FakeBook(str(workbook_path.resolve()), table, app)
+    app.books.append(book)
+
+    monkeypatch.setattr(writer, "xw", FakeXw(app))
+
+    trade = _trade(open_date=None, quantity=50.0, side="B", strike=None)
+    trade.exp_date = None
+    trade.call_or_put = None
+    trade.account = "Fidelity"
+    trade.status = "Closed"
+    trade.exit_price = 3.0
+    trade.close_date = date(2024, 6, 20)
+
+    written = writer.write_trades(workbook_path, TABLE_NAME, [trade])
+
+    assert written == 1
+    # The earlier-opened (2024-01-01) row must be the one selected and split,
+    # not the row that merely appears first in the table.
+    updated_rows = table.DataBodyRange.Value
+    assert updated_rows[0][4] == 100.0  # untouched
+    assert updated_rows[1][4] == 50.0  # reduced by the close
+    split_row = table.added_rows[0]
+    assert split_row[3] == date(2024, 1, 1)  # Open Date carried from the earliest row
 
 
 def test_write_trades_rejects_ambiguous_close_match(monkeypatch: Any, tmp_path: Path) -> None:
