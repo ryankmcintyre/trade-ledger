@@ -101,8 +101,8 @@ def _find_header_index(rows: list[list[str]]) -> int | None:
 
 def _parse_row(
     row: dict[str, str | None],
-    symbol_prompt: Callable[[str, str], str | None] | None = None,
-    account: str = FIDELITY_BROKER_NAME,
+    symbol_prompt: Callable[[str, str], str | None] | None,
+    account: str,
 ) -> tuple[RawEvent | None, ResolutionFailure | None]:
     action = (_get_value(row, "action") or "").strip()
     mapping = _map_action(action)
