@@ -659,8 +659,7 @@ def _merge_open_fields_from_row(trade: CanonicalTrade, row: list[Any], headers: 
         return trade
 
     merged = replace(trade, **updates)
-    merged.trade_id = make_trade_id(merged)
-    return merged
+    return replace(merged, trade_id=make_trade_id(merged))
 
 
 def _update_existing_trade_row(
