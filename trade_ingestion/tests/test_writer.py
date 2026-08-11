@@ -469,6 +469,58 @@ def test_write_trades_updates_existing_open_row_for_close_trade(monkeypatch: Any
     assert updated_row[12] == "Closed"
 
 
+def test_write_trades_preserves_existing_stock_cell_when_updating_row(monkeypatch: Any, tmp_path: Path) -> None:
+    workbook_path = tmp_path / "ledger.xlsx"
+    workbook_path.write_text("placeholder", encoding="utf-8")
+
+    headers = ["Stock", "Stock Symbol", "Open Date", "Exp Date", "Call or Put", "B/S",
+               "Strike Price", "Premium", "C", "Fees", "Exit Price", "Close Date", "Status", "Account"]
+    existing_rows = [["SPY-LINKED", "SPY", date(2024, 1, 2), date(2024, 1, 19), "C", "B",
+                      450.0, 2.0, 1.0, None, None, None, "Open", "Fidelity"]]
+    table = FakeTable(headers, existing_rows)
+    app = FakeApp([])
+    book = FakeBook(str(workbook_path.resolve()), table, app)
+    app.books.append(book)
+
+    monkeypatch.setattr(writer, "xw", FakeXw(app))
+
+    trade = _trade(open_date=None, quantity=1.0, side="B")
+    trade.status = "Closed"
+    trade.exit_price = 3.0
+    trade.close_date = date(2024, 1, 5)
+
+    written = writer.write_trades(workbook_path, SHEET_NAME, [trade])
+
+    assert written == 1
+    assert len(table.added_rows) == 0
+    updated_row = table.DataBodyRange.Value[0]
+    assert updated_row[0] == "SPY-LINKED"
+
+
+def test_write_trades_rejects_ambiguous_close_match(monkeypatch: Any, tmp_path: Path) -> None:
+    workbook_path = tmp_path / "ledger.xlsx"
+    workbook_path.write_text("placeholder", encoding="utf-8")
+
+    headers = ["Stock", "Stock Symbol", "Open Date", "B/S", "C", "Account"]
+    existing_rows = [
+        ["SPY", "SPY", date(2024, 1, 2), "B", 1.0, "Fidelity"],
+        ["SPY", "SPY", date(2024, 1, 3), "B", 1.0, "Fidelity"],
+    ]
+    table = FakeTable(headers, existing_rows)
+    app = FakeApp([])
+    book = FakeBook(str(workbook_path.resolve()), table, app)
+    app.books.append(book)
+
+    monkeypatch.setattr(writer, "xw", FakeXw(app))
+
+    trade = _trade(open_date=None, quantity=1.0, side="B")
+    trade.exit_price = 3.0
+    trade.close_date = date(2024, 1, 5)
+
+    with pytest.raises(ValueError, match="Multiple existing rows matched close trade"):
+        writer.write_trades(workbook_path, SHEET_NAME, [trade])
+
+
 def test_write_trades_skips_none_values(monkeypatch: Any, tmp_path: Path) -> None:
     workbook_path = tmp_path / "ledger.xlsx"
     workbook_path.write_text("placeholder", encoding="utf-8")

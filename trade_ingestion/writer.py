@@ -163,7 +163,6 @@ def write_trades_detailed(
             update_row_index = _find_existing_row_to_update(table, headers, trade)
             if update_row_index is not None:
                 _update_existing_trade_row(sheet, table, headers, header_positions, update_row_index, trade)
-                existing_keys.add(_make_dedup_key(trade, headers))
                 updated_rows += 1
                 continue
 
@@ -410,8 +409,12 @@ def _find_existing_row_to_update(table: Any, headers: list[str], trade: Canonica
             continue
 
         candidates.append(row_index + 1)
-        if len(candidates) > 1:
-            return None
+
+    if len(candidates) > 1:
+        context = trade.trade_id or trade.lot_id or trade.symbol or "trade"
+        raise ValueError(
+            f"Multiple existing rows matched close trade '{context}'; cannot reconcile automatically"
+        )
 
     return candidates[0] if candidates else None
 
@@ -495,6 +498,8 @@ def _update_existing_trade_row(
 
     for field_name, col_name in FIELD_TO_COLUMN.items():
         if col_name not in header_positions:
+            continue
+        if field_name == "stock":
             continue
         value = getattr(trade, field_name, None)
         if value is None:
