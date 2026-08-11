@@ -76,7 +76,7 @@ def parse_fidelity_csv_detailed(
 
     # NOTE: The account value comes from the caller-supplied command-line parameter, not from
     # NOTE: the CSV's Account / Account Number columns; it defaults to the broker name when omitted.
-    resolved_account = account if account else FIDELITY_BROKER_NAME
+    resolved_account = account if account is not None else FIDELITY_BROKER_NAME
 
     events: list[RawEvent] = []
     symbol_failures: list[ResolutionFailure] = []

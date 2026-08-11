@@ -42,7 +42,7 @@ def run_pipeline(
         supported = ", ".join(sorted(ADAPTERS))
         raise ValueError(f"Unsupported broker {broker!r}. Supported brokers: {supported}")
 
-    resolved_account = account if account else broker
+    resolved_account = account if account is not None else broker
     csv_content = csv_path.read_text(encoding="utf-8-sig")
     parse_result = adapter(csv_content, symbol_prompt, resolved_account)
     match_result = match_trades_with_summary(parse_result.events)
