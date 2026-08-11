@@ -12,6 +12,7 @@ from constants import (
     DEDUP_COLUMNS,
     FIELD_TO_COLUMN,
     LINKED_DATA_TYPE_CULTURE,
+    STOCK_FIELD_NAME,
     STOCK_SYMBOL_COLUMN,
     STOCKS_SERVICE_ID,
     TABLE_NAME,
@@ -410,6 +411,8 @@ def _find_existing_row_to_update(table: Any, headers: list[str], trade: Canonica
 
         candidates.append(row_index + 1)
 
+    # Collect all potential matches before raising so an ambiguous reconciliation
+    # is surfaced consistently rather than silently falling back to appending.
     if len(candidates) > 1:
         context = trade.trade_id or trade.lot_id or trade.symbol or "trade"
         raise ValueError(
@@ -499,7 +502,9 @@ def _update_existing_trade_row(
     for field_name, col_name in FIELD_TO_COLUMN.items():
         if col_name not in header_positions:
             continue
-        if field_name == "stock":
+        if field_name == STOCK_FIELD_NAME:
+            # NOTE: preserve the existing Excel Stocks linked-data cell instead of
+            # NOTE: overwriting it with plain text during in-place close reconciliation.
             continue
         value = getattr(trade, field_name, None)
         if value is None:
