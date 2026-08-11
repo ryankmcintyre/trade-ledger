@@ -633,6 +633,40 @@ def test_write_trades_rejects_missing_table_on_sheet(monkeypatch: Any, tmp_path:
     assert len(table.added_rows) == 0
 
 
+def test_write_trades_finds_sheet_when_listobjects_returns_new_proxy(monkeypatch: Any, tmp_path: Path) -> None:
+    workbook_path = tmp_path / "ledger.xlsx"
+    workbook_path.write_text("placeholder", encoding="utf-8")
+
+    class ProxyTable:
+        def __init__(self, table: FakeTable) -> None:
+            self._table = table
+
+        def __getattr__(self, name: str) -> Any:
+            return getattr(self._table, name)
+
+    class ProxySheetApi:
+        def __init__(self, sheet: FakeSheet) -> None:
+            self._sheet = sheet
+
+        def ListObjects(self, name: str) -> Any:
+            if name != TABLE_NAME or self._sheet.list_object_name != TABLE_NAME:
+                raise KeyError(name)
+            return ProxyTable(self._sheet._table)
+
+    table = FakeTable(["Stock", "Open Date", "B/S", "C"], [])
+    app = FakeApp([])
+    book = FakeBook(str(workbook_path.resolve()), table, app)
+    book.sheets[0].api = ProxySheetApi(book.sheets[0])
+    app.books.append(book)
+
+    monkeypatch.setattr(writer, "xw", FakeXw(app))
+
+    written = writer.write_trades(workbook_path, TABLE_NAME, [_trade()])
+
+    assert written == 1
+    assert len(table.added_rows) == 1
+
+
 def _make_transient_com_error() -> Exception:
     """Build an exception shaped like the real RPC_E_CALL_REJECTED failure."""
     return pywintypes.com_error(-2147418111, "Call was rejected by callee.", None, None)

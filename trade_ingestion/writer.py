@@ -148,7 +148,7 @@ def write_trades_detailed(
     workbook, app, was_open = _open_workbook(workbook_path)
     try:
         table = _find_table(workbook, table_name)
-        sheet = _find_sheet_for_table(workbook, table, table_name)
+        sheet = _find_sheet_for_table(workbook, table_name)
         headers = _table_headers(table)
         existing_keys = _existing_dedup_keys(table, headers)
 
@@ -655,14 +655,15 @@ def _find_table(workbook: Any, table_name: str) -> Any:
     return _call_with_com_retry(_search)
 
 
-def _find_sheet_for_table(workbook: Any, table: Any, table_name: str) -> Any:
+def _find_sheet_for_table(workbook: Any, table_name: str) -> Any:
     for sheet in workbook.sheets:
-        if getattr(sheet, "api", None) is not None:
-            try:
-                if sheet.api.ListObjects(table_name) is table:
-                    return sheet
-            except Exception:
-                continue
+        if getattr(sheet, "api", None) is None:
+            continue
+        try:
+            sheet.api.ListObjects(table_name)
+            return sheet
+        except Exception:
+            continue
     raise ValueError(f"Could not find a worksheet containing table {table_name!r}")
 
 
