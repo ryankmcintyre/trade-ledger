@@ -12,6 +12,7 @@ from constants import (
     DEDUP_COLUMNS,
     FIELD_TO_COLUMN,
     LINKED_DATA_TYPE_CULTURE,
+    LOT_ID_COLUMN,
     STOCK_FIELD_NAME,
     STOCK_SYMBOL_COLUMN,
     STOCKS_SERVICE_ID,
@@ -365,7 +366,24 @@ def read_existing_lot_ids(workbook_path: Path, table_name: str) -> set[str]:
             app.quit()
 
 
+_LOT_ID_KEY_PREFIX = "lotid:"
+
+
 def _make_dedup_key(trade: CanonicalTrade, headers: list[str]) -> str:
+    """Build a dedup key for `trade`.
+
+    When the workbook has a Lot ID column, `CanonicalTrade.lot_id` — the primary
+    dedup discriminator — is used directly so that legitimate distinct lots (e.g.
+    two same-day trades on the same contract/side/quantity) are never collapsed.
+    Otherwise falls back to a composite key built from DEDUP_COLUMNS, for
+    workbooks/rows written before the Lot ID column existed.
+    """
+    if LOT_ID_COLUMN in headers and trade.lot_id:
+        return f"{_LOT_ID_KEY_PREFIX}{trade.lot_id}"
+    return _make_composite_dedup_key(trade)
+
+
+def _make_composite_dedup_key(trade: CanonicalTrade) -> str:
     """Build a composite dedup key from trade fields matching DEDUP_COLUMNS."""
     parts: list[str] = []
     for col_name in DEDUP_COLUMNS:
@@ -523,6 +541,13 @@ def _update_existing_trade_row(
             # NOTE: preserve the existing Excel Stocks linked-data cell instead of
             # NOTE: overwriting it with plain text during in-place close reconciliation.
             continue
+        if field_name == "lot_id":
+            # NOTE: preserve the row's original Lot ID during in-place close
+            # NOTE: reconciliation — the incoming close trade may carry a
+            # NOTE: different lot_id (its own close event's, for an orphan close
+            # NOTE: matched to a previously-written open row) and must not
+            # NOTE: overwrite the identity of the lot being closed.
+            continue
         value = getattr(trade, field_name, None)
         if value is None:
             continue
@@ -540,13 +565,20 @@ def _update_existing_trade_row(
 
 
 def _existing_dedup_keys(table: Any, headers: list[str]) -> set[str]:
-    """Read existing rows and build composite dedup keys."""
+    """Read existing rows and build dedup keys.
+
+    Rows with a Lot ID value are keyed by that value directly (the primary dedup
+    discriminator); rows without one (e.g. written before the Lot ID column
+    existed) fall back to the composite key built from DEDUP_COLUMNS.
+    """
     values: set[str] = set()
     data_range = getattr(table, "DataBodyRange", None)
     if data_range is None or data_range.Value in (None, ""):
         return values
 
     rows = _normalize_table_rows(data_range.Value, len(headers))
+
+    lot_id_index = headers.index(LOT_ID_COLUMN) if LOT_ID_COLUMN in headers else None
 
     # Find column indices for dedup columns
     col_indices: dict[str, int | None] = {}
@@ -558,6 +590,10 @@ def _existing_dedup_keys(table: Any, headers: list[str]) -> set[str]:
     symbol_index = headers.index(STOCK_SYMBOL_COLUMN) if STOCK_SYMBOL_COLUMN in headers else None
 
     for row in rows:
+        if lot_id_index is not None and lot_id_index < len(row) and row[lot_id_index] not in (None, ""):
+            values.add(f"{_LOT_ID_KEY_PREFIX}{row[lot_id_index]}")
+            continue
+
         parts: list[str] = []
         for col_name in DEDUP_COLUMNS:
             idx = col_indices[col_name]

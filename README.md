@@ -85,7 +85,7 @@ Ingested 12 trade rows to /Users/ryan/trades/ledger.xlsx [tbl_trades]; skipped 3
 ```
 
 - **Ingested** — new rows written to `tbl_trades`
-- **Skipped** — rows already present in the workbook (deduplicated by composite key: Stock + Open Date + B/S + Quantity)
+- **Skipped** — rows already present in the workbook (deduplicated by Lot ID when the workbook has that column, else a composite key: Stock + Open Date + B/S + Quantity + Strike Price)
 - **Open positions** — trades with no matching close event in the imported file (written as open rows with blank `exit_price` and `close_date`)
 
 ---
@@ -134,7 +134,7 @@ To export from Fidelity: **Accounts & Trade → Activity & Orders → History** 
 1. The adapter parses the CSV into a list of raw trade events (one buy or sell per row).
 2. Same-day events for the same symbol/side/effect are pre-aggregated (weighted-average pricing, summed quantities).
 3. The matcher pairs open and close events FIFO within each `(account, symbol, side)` group into complete trade rows. Partial closes produce two rows: one matched, one remaining open. Sells without a matching open produce close-only rows.
-4. The writer locates the Excel table named by `--table`, reads existing rows to skip duplicates (composite key: Stock + Open Date + B/S + Quantity, where the ticker is taken from the resolved `Stock Symbol` column), then appends new rows.
+4. The writer locates the Excel table named by `--table`, reads existing rows to skip duplicates — keyed by Lot ID when the workbook has that column (the primary dedup discriminator), else a composite key: Stock + Open Date + B/S + Quantity + Strike Price, where the ticker is taken from the resolved `Stock Symbol` column — then appends new rows.
 5. Each new Column A ("Stock") cell is converted to the Excel **Stocks linked data type**, because the workbook derives `Stock Symbol` and `Current Stock Price` from `_FV(A, ...)` formulas that only accept a rich value — a plain ticker string leaves those columns unresolved.
 6. Formula-driven columns are never written — they remain owned by Excel.
 
