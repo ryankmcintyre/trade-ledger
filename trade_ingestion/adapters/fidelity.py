@@ -59,6 +59,7 @@ class FidelityParseError(ValueError):
 def parse_fidelity_csv_detailed(
     content: str,
     symbol_prompt: Callable[[str, str], str | None] | None = None,
+    account: str | None = None,
 ) -> FidelityParseResult:
     rows = list(csv.reader(io.StringIO(content)))
     header_index = _find_header_index(rows)
@@ -73,10 +74,14 @@ def parse_fidelity_csv_detailed(
     for _ in range(header_index - empty_before_header + 1):
         next(reader, None)
 
+    # NOTE: The account value comes from the caller-supplied command-line parameter, not from
+    # NOTE: the CSV's Account / Account Number columns; it defaults to the broker name when omitted.
+    resolved_account = account if account else FIDELITY_BROKER_NAME
+
     events: list[RawEvent] = []
     symbol_failures: list[ResolutionFailure] = []
     for row in reader:
-        event, failure = _parse_row(row, symbol_prompt)
+        event, failure = _parse_row(row, symbol_prompt, resolved_account)
         if event is not None:
             events.append(event)
         if failure is not None:
@@ -97,6 +102,7 @@ def _find_header_index(rows: list[list[str]]) -> int | None:
 def _parse_row(
     row: dict[str, str | None],
     symbol_prompt: Callable[[str, str], str | None] | None = None,
+    account: str = FIDELITY_BROKER_NAME,
 ) -> tuple[RawEvent | None, ResolutionFailure | None]:
     action = (_get_value(row, "action") or "").strip()
     mapping = _map_action(action)
@@ -140,7 +146,7 @@ def _parse_row(
     return RawEvent(
         lot_id=lot_id,
         broker=FIDELITY_BROKER_NAME,
-        account=FIDELITY_BROKER_NAME,
+        account=account,
         underlying=parsed_symbol["underlying"],
         symbol=parsed_symbol["symbol"],
         trade_date=trade_date,

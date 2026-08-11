@@ -70,6 +70,7 @@ python main.py <broker> <csv_path> --workbook <workbook_path> --sheet <sheet_nam
 | `csv_path` | Path to the broker-exported CSV file |
 | `--workbook` | Path to the Excel workbook containing `tbl_trades` |
 | `--sheet` | Name of the worksheet inside the workbook that holds the `tbl_trades` table (required — a workbook may contain several sheets with a table of that name) |
+| `--account` | Optional account identifier written to `RawEvent.account` for imported trades. Independent of any Account/Account Number columns in the CSV. Defaults to the `broker` argument when omitted. |
 
 **Example:**
 

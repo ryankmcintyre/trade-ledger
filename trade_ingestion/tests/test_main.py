@@ -59,9 +59,10 @@ def test_run_pipeline_uses_broker_adapter_and_writer(monkeypatch: Any, tmp_path:
         )
     ]
 
-    def fake_adapter(content: str, symbol_prompt: Any = None) -> FidelityParseResult:
+    def fake_adapter(content: str, symbol_prompt: Any = None, account: str | None = None) -> FidelityParseResult:
         captured["content"] = content
         captured["symbol_prompt"] = symbol_prompt
+        captured["account"] = account
         return FidelityParseResult(events=events, symbol_failures=[])
 
     def fake_match_trades(input_events: list[RawEvent], existing_lot_ids: set[str] | None = None) -> MatchResult:
@@ -92,6 +93,7 @@ def test_run_pipeline_uses_broker_adapter_and_writer(monkeypatch: Any, tmp_path:
     assert captured["sheet_name"] == "Trades"
     assert captured["trades"] == trades
     assert captured["ticker_prompt"] is None
+    assert captured["account"] == "fake"
 
 
 def test_run_pipeline_rejects_unsupported_broker(tmp_path: Path) -> None:
@@ -106,6 +108,70 @@ def test_run_pipeline_rejects_unsupported_broker(tmp_path: Path) -> None:
         )
 
 
+def test_run_pipeline_uses_explicit_account_when_provided(monkeypatch: Any, tmp_path: Path) -> None:
+    csv_path = tmp_path / "input.csv"
+    workbook_path = tmp_path / "ledger.xlsx"
+    csv_path.write_text("example", encoding="utf-8")
+    workbook_path.write_text("placeholder", encoding="utf-8")
+    captured: dict[str, Any] = {}
+
+    def fake_adapter(content: str, symbol_prompt: Any = None, account: str | None = None) -> FidelityParseResult:
+        captured["account"] = account
+        return FidelityParseResult(events=[], symbol_failures=[])
+
+    def fake_match_trades(input_events: list[RawEvent], existing_lot_ids: set[str] | None = None) -> MatchResult:
+        return MatchResult(trades=[], skipped_duplicates=0, open_positions=0)
+
+    def fake_write_trades(
+        path: Path, sheet_name: str, input_trades: list[CanonicalTrade], ticker_prompt: Any = None
+    ) -> WriteResult:
+        return WriteResult(rows_written=0, failed_conversions=[])
+
+    monkeypatch.setitem(main.ADAPTERS, "fake", fake_adapter)
+    monkeypatch.setattr(main, "match_trades_with_summary", fake_match_trades)
+    monkeypatch.setattr(main, "write_trades_detailed", fake_write_trades)
+
+    main.run_pipeline(
+        broker="fake",
+        csv_path=csv_path,
+        workbook_path=workbook_path,
+        sheet_name="Trades",
+        account="Roth IRA",
+    )
+
+    assert captured["account"] == "Roth IRA"
+
+
+def test_run_pipeline_defaults_account_to_broker_when_omitted(monkeypatch: Any, tmp_path: Path) -> None:
+    csv_path = tmp_path / "input.csv"
+    workbook_path = tmp_path / "ledger.xlsx"
+    csv_path.write_text("example", encoding="utf-8")
+    workbook_path.write_text("placeholder", encoding="utf-8")
+    captured: dict[str, Any] = {}
+
+    def fake_adapter(content: str, symbol_prompt: Any = None, account: str | None = None) -> FidelityParseResult:
+        captured["account"] = account
+        return FidelityParseResult(events=[], symbol_failures=[])
+
+    def fake_match_trades(input_events: list[RawEvent], existing_lot_ids: set[str] | None = None) -> MatchResult:
+        return MatchResult(trades=[], skipped_duplicates=0, open_positions=0)
+
+    def fake_write_trades(
+        path: Path, sheet_name: str, input_trades: list[CanonicalTrade], ticker_prompt: Any = None
+    ) -> WriteResult:
+        return WriteResult(rows_written=0, failed_conversions=[])
+
+    monkeypatch.setitem(main.ADAPTERS, "fake", fake_adapter)
+    monkeypatch.setattr(main, "match_trades_with_summary", fake_match_trades)
+    monkeypatch.setattr(main, "write_trades_detailed", fake_write_trades)
+
+    main.run_pipeline(
+        broker="fake", csv_path=csv_path, workbook_path=workbook_path, sheet_name="Trades"
+    )
+
+    assert captured["account"] == "fake"
+
+
 def test_main_parses_cli_arguments(monkeypatch: Any, capsys: pytest.CaptureFixture[str], tmp_path: Path) -> None:
     csv_path = tmp_path / "input.csv"
     workbook_path = tmp_path / "ledger.xlsx"
@@ -116,6 +182,7 @@ def test_main_parses_cli_arguments(monkeypatch: Any, capsys: pytest.CaptureFixtu
         csv_path: Path,
         workbook_path: Path,
         sheet_name: str,
+        account: str | None = None,
         ticker_prompt: Any = None,
         symbol_prompt: Any = None,
     ) -> main.PipelineResult:
@@ -123,6 +190,7 @@ def test_main_parses_cli_arguments(monkeypatch: Any, capsys: pytest.CaptureFixtu
         assert csv_path == tmp_path / "input.csv"
         assert workbook_path == tmp_path / "ledger.xlsx"
         assert sheet_name == "Trades"
+        assert account is None
         assert ticker_prompt is None
         assert symbol_prompt is None
         return main.PipelineResult(rows_ingested=3, rows_skipped=2, open_positions=1)
@@ -140,6 +208,44 @@ def test_main_parses_cli_arguments(monkeypatch: Any, capsys: pytest.CaptureFixtu
         "skipped 2 duplicate rows; "
         "left 1 open position unmatched"
     )
+
+
+def test_main_passes_explicit_account_argument(monkeypatch: Any, tmp_path: Path) -> None:
+    csv_path = tmp_path / "input.csv"
+    workbook_path = tmp_path / "ledger.xlsx"
+    captured: dict[str, Any] = {}
+
+    def fake_run_pipeline(
+        *,
+        broker: str,
+        csv_path: Path,
+        workbook_path: Path,
+        sheet_name: str,
+        account: str | None = None,
+        ticker_prompt: Any = None,
+        symbol_prompt: Any = None,
+    ) -> main.PipelineResult:
+        captured["account"] = account
+        return main.PipelineResult(rows_ingested=1, rows_skipped=0, open_positions=0)
+
+    monkeypatch.setattr(main, "run_pipeline", fake_run_pipeline)
+    monkeypatch.setattr(main, "_stdin_is_interactive", lambda: False)
+
+    exit_code = main.main(
+        [
+            "fidelity",
+            str(csv_path),
+            "--workbook",
+            str(workbook_path),
+            "--sheet",
+            "Trades",
+            "--account",
+            "Roth IRA",
+        ]
+    )
+
+    assert exit_code == 0
+    assert captured["account"] == "Roth IRA"
 
 
 def test_main_requires_sheet_argument(tmp_path: Path) -> None:
@@ -163,6 +269,7 @@ def test_main_skips_prompt_when_no_prompt_flag_is_set(
         csv_path: Path,
         workbook_path: Path,
         sheet_name: str,
+        account: str | None = None,
         ticker_prompt: Any = None,
         symbol_prompt: Any = None,
     ) -> main.PipelineResult:
@@ -195,6 +302,7 @@ def test_main_enables_prompt_when_stdin_is_interactive(
         csv_path: Path,
         workbook_path: Path,
         sheet_name: str,
+        account: str | None = None,
         ticker_prompt: Any = None,
         symbol_prompt: Any = None,
     ) -> main.PipelineResult:
@@ -222,6 +330,7 @@ def test_main_reports_conversion_failure_details(monkeypatch: Any, capsys: pytes
         csv_path: Path,
         workbook_path: Path,
         sheet_name: str,
+        account: str | None = None,
         ticker_prompt: Any = None,
         symbol_prompt: Any = None,
     ) -> main.PipelineResult:
@@ -281,6 +390,7 @@ def test_main_reports_symbol_parse_failure_details(
         csv_path: Path,
         workbook_path: Path,
         sheet_name: str,
+        account: str | None = None,
         ticker_prompt: Any = None,
         symbol_prompt: Any = None,
     ) -> main.PipelineResult:

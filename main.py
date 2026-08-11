@@ -11,7 +11,7 @@ from trade_ingestion.matcher import match_trades_with_summary
 from trade_ingestion.models import CanonicalTrade, FidelityParseResult, ResolutionFailure
 from trade_ingestion.writer import ConversionFailure, write_trades_detailed
 
-Adapter = Callable[[str, "Callable[[str, str], str | None] | None"], FidelityParseResult]
+Adapter = Callable[[str, "Callable[[str, str], str | None] | None", "str | None"], FidelityParseResult]
 ADAPTERS: dict[str, Adapter] = {
     "fidelity": parse_fidelity_csv_detailed,
 }
@@ -33,6 +33,7 @@ def run_pipeline(
     csv_path: Path,
     workbook_path: Path,
     sheet_name: str,
+    account: str | None = None,
     ticker_prompt: Callable[[str, CanonicalTrade], str | None] | None = None,
     symbol_prompt: Callable[[str, str], str | None] | None = None,
 ) -> PipelineResult:
@@ -41,8 +42,9 @@ def run_pipeline(
         supported = ", ".join(sorted(ADAPTERS))
         raise ValueError(f"Unsupported broker {broker!r}. Supported brokers: {supported}")
 
+    resolved_account = account if account else broker
     csv_content = csv_path.read_text(encoding="utf-8-sig")
-    parse_result = adapter(csv_content, symbol_prompt)
+    parse_result = adapter(csv_content, symbol_prompt, resolved_account)
     match_result = match_trades_with_summary(parse_result.events)
     write_result = write_trades_detailed(
         workbook_path,
@@ -77,6 +79,14 @@ def build_parser() -> argparse.ArgumentParser:
         "--sheet",
         required=True,
         help="Name of the worksheet inside the workbook that contains the tbl_trades table",
+    )
+    parser.add_argument(
+        "--account",
+        default=None,
+        help=(
+            "Account identifier to record on imported trades. Defaults to the broker name "
+            "when omitted. Independent of any Account/Account Number columns in the CSV."
+        ),
     )
     parser.add_argument(
         "--no-prompt",
@@ -127,6 +137,7 @@ def main(argv: Sequence[str] | None = None) -> int:
         csv_path=args.csv_path,
         workbook_path=args.workbook,
         sheet_name=args.sheet,
+        account=args.account,
         ticker_prompt=ticker_prompt,
         symbol_prompt=symbol_prompt,
     )
