@@ -172,14 +172,37 @@ def write_trades_detailed(
                 if remaining_quantity is not None and remaining_quantity > MATCH_EPSILON:
                     # Partial close: the matched row's open quantity is larger than what
                     # this close accounts for (e.g. two separate sell tickets closing a
-                    # single larger open lot). Shrink the existing row down to the
-                    # quantity still open, and write the closed portion as its own new
-                    # row carrying the original open-side data.
-                    _reduce_existing_row_quantity(
-                        sheet, table, headers, header_positions, row_index, remaining_quantity
-                    )
+                    # single larger open lot). The closed portion is written as its own
+                    # new row carrying the original open-side data, so the composite
+                    # dedup key (when there is no Lot ID column) must be derived only
+                    # after merging those open-side fields in.
                     split_trade = _merge_open_fields_from_row(trade, row, headers)
+
+                    row_quantity = _row_quantity(row, headers)
+                    row_fees = _row_fees(row, headers)
+                    open_fee_share = _allocate_fee(row_fees, row_quantity, remaining_quantity)
+                    close_fee_share = _allocate_fee(row_fees, row_quantity, trade.quantity)
+                    if close_fee_share is not None:
+                        split_trade = replace(split_trade, fees=(split_trade.fees or 0.0) + close_fee_share)
+
                     key = _make_dedup_key(split_trade, headers)
+                    if key in existing_keys:
+                        # Already reconciled in a previous run/import — re-importing the
+                        # same closing ticket must not shrink the (already-shrunk) open
+                        # row a second time.
+                        continue
+
+                    # Shrink the existing row down to the quantity still open, carrying
+                    # forward its proportional share of the row's original opening fees.
+                    _reduce_existing_row_quantity(
+                        sheet,
+                        table,
+                        headers,
+                        header_positions,
+                        row_index,
+                        remaining_quantity,
+                        remaining_fees=open_fee_share,
+                    )
                     pending.append(split_trade)
                     existing_keys.add(key)
                 else:
@@ -454,15 +477,104 @@ def _find_existing_row_to_update(
 
         candidates.append((row_index + 1, row))
 
-    # Collect all potential matches before raising so an ambiguous reconciliation
-    # is surfaced consistently rather than silently falling back to appending.
-    if len(candidates) > 1:
-        context = trade.trade_id or trade.lot_id or trade.symbol or "trade"
-        raise ValueError(
-            f"Multiple existing rows matched close trade '{context}'; cannot reconcile automatically"
-        )
+    if not candidates:
+        return None
 
-    return candidates[0] if candidates else None
+    # An exact-quantity match is unambiguous even when a larger, partially-open
+    # row also satisfies the relaxed `row_quantity >= close_quantity` comparison
+    # in `_row_matches_trade` (e.g. rows open for 50 and 100 shares both "match"
+    # a 50-share close). Prefer the exact match so it closes outright instead of
+    # being folded into a partial-close split.
+    exact_candidates = [
+        (idx, row) for idx, row in candidates if _is_exact_quantity_match(row, headers, trade.quantity)
+    ]
+    if exact_candidates:
+        if len(exact_candidates) > 1:
+            context = trade.trade_id or trade.lot_id or trade.symbol or "trade"
+            raise ValueError(
+                f"Multiple existing rows matched close trade '{context}'; cannot reconcile automatically"
+            )
+        return exact_candidates[0]
+
+    if len(candidates) == 1:
+        return candidates[0]
+
+    # TODO: Several partially-open rows qualify for this close and none matches
+    # exactly. Default to FIFO (earliest Open Date first, ties broken by table
+    # row order) for review — the issue does not specify a required order when
+    # more than one open lot could absorb the same close.
+    return _fifo_earliest_candidate(candidates, headers)
+
+
+def _row_quantity(row: list[Any], headers: list[str]) -> float | None:
+    """Return the row's "C" (quantity) value, or None if unavailable/unreadable."""
+    quantity_index = headers.index("C") if "C" in headers else None
+    if quantity_index is None or quantity_index >= len(row):
+        return None
+    row_quantity_raw = row[quantity_index]
+    if row_quantity_raw in (None, ""):
+        return None
+    try:
+        return float(row_quantity_raw)
+    except (TypeError, ValueError):
+        return None
+
+
+def _row_fees(row: list[Any], headers: list[str]) -> float | None:
+    """Return the row's "Fees" value, or None if unavailable/unreadable."""
+    fees_index = headers.index("Fees") if "Fees" in headers else None
+    if fees_index is None or fees_index >= len(row):
+        return None
+    value = row[fees_index]
+    if value in (None, ""):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _allocate_fee(total_fee: float | None, quantity_pool: float | None, quantity_slice: float) -> float | None:
+    """Allocate a proportional share of `total_fee` for `quantity_slice` out of `quantity_pool`.
+
+    Mirrors matcher._allocate_fee's proportional-by-quantity allocation so that
+    splitting an existing open row's fees follows the same convention as the
+    matcher's own partial-lot fee allocation.
+    """
+    if total_fee is None or quantity_pool is None:
+        return None
+    if quantity_pool <= MATCH_EPSILON:
+        return None
+    return total_fee * (quantity_slice / quantity_pool)
+
+
+def _is_exact_quantity_match(row: list[Any], headers: list[str], close_quantity: float) -> bool:
+    row_quantity = _row_quantity(row, headers)
+    if row_quantity is None:
+        return False
+    return abs(row_quantity - close_quantity) <= MATCH_EPSILON
+
+
+def _fifo_earliest_candidate(
+    candidates: list[tuple[int, list[Any]]], headers: list[str]
+) -> tuple[int, list[Any]]:
+    """Return the candidate with the earliest Open Date (ties broken by row order)."""
+    open_date_index = headers.index("Open Date") if "Open Date" in headers else None
+
+    def _sort_key(candidate: tuple[int, list[Any]]) -> date:
+        _, row = candidate
+        if open_date_index is None or open_date_index >= len(row):
+            return date.max
+        value = row[open_date_index]
+        if isinstance(value, (int, float)):
+            parsed = _excel_serial_to_date(float(value))
+        elif hasattr(value, "date") and callable(getattr(value, "date", None)):
+            parsed = value.date()
+        else:
+            parsed = None
+        return parsed if parsed is not None else date.max
+
+    return min(candidates, key=_sort_key)
 
 
 def _remaining_open_quantity(row: list[Any], headers: list[str], close_quantity: float) -> float | None:
@@ -472,15 +584,8 @@ def _remaining_open_quantity(row: list[Any], headers: list[str], close_quantity:
     the caller should treat the match as a full close, matching prior behavior),
     or when the close accounts for the entire open quantity (nothing remains open).
     """
-    quantity_index = headers.index("C") if "C" in headers else None
-    if quantity_index is None or quantity_index >= len(row):
-        return None
-    row_quantity_raw = row[quantity_index]
-    if row_quantity_raw in (None, ""):
-        return None
-    try:
-        row_quantity = float(row_quantity_raw)
-    except (TypeError, ValueError):
+    row_quantity = _row_quantity(row, headers)
+    if row_quantity is None:
         return None
 
     remaining = row_quantity - close_quantity
@@ -588,25 +693,40 @@ def _reduce_existing_row_quantity(
     header_positions: dict[str, int],
     row_index: int,
     remaining_quantity: float,
+    remaining_fees: float | None = None,
 ) -> None:
-    """Shrink an existing open row's quantity to what's still open.
+    """Shrink an existing open row's quantity (and, if provided, its Fees) to
+    what's still open.
 
     Used when a close only accounts for part of an existing open row's
     quantity (e.g. two separate closing tickets against one larger open
     lot). The row is left open — no close-side columns are touched.
+    `remaining_fees` is the row's own opening fees reallocated to the portion
+    that stays open (see `_allocate_fee`); when None the Fees cell is left
+    untouched.
     """
     quantity_column = header_positions.get("C")
-    if quantity_column is None:
+    fees_column = header_positions.get("Fees")
+    if quantity_column is None and fees_column is None:
         return
 
     list_row = _call_with_com_retry(lambda: table.ListRows(row_index))
     base_row = _call_with_com_retry(lambda: list_row.Range.Row)
     base_column = _call_with_com_retry(lambda: list_row.Range.Column)
 
-    def _write_cell() -> None:
-        sheet.range((base_row, base_column + quantity_column - 1)).value = remaining_quantity
+    if quantity_column is not None:
 
-    _call_with_com_retry(_write_cell)
+        def _write_quantity() -> None:
+            sheet.range((base_row, base_column + quantity_column - 1)).value = remaining_quantity
+
+        _call_with_com_retry(_write_quantity)
+
+    if fees_column is not None and remaining_fees is not None:
+
+        def _write_fees() -> None:
+            sheet.range((base_row, base_column + fees_column - 1)).value = remaining_fees
+
+        _call_with_com_retry(_write_fees)
 
 
 def _merge_open_fields_from_row(trade: CanonicalTrade, row: list[Any], headers: list[str]) -> CanonicalTrade:

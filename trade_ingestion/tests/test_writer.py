@@ -733,6 +733,179 @@ def test_write_trades_splits_partial_close_against_larger_open_row(monkeypatch: 
     assert updated_row[12] == "Closed"  # Status
 
 
+def test_write_trades_partial_close_split_allocates_fees_proportionally(
+    monkeypatch: Any, tmp_path: Path
+) -> None:
+    """The existing open row's own opening fees must be split proportionally
+    between the row that stays open and the new row created for the closed
+    portion, with the closed portion's share added to the incoming close's
+    own fees rather than dropped."""
+    workbook_path = tmp_path / "ledger.xlsx"
+    workbook_path.write_text("placeholder", encoding="utf-8")
+
+    headers = ["Stock", "Stock Symbol", "Open Date", "Exp Date", "Call or Put", "B/S",
+               "Strike Price", "Premium", "C", "Fees", "Exit Price", "Close Date", "Status", "Account"]
+    existing_rows = [["XOMX", "XOMX", date(2026, 6, 3), None, None, "C",
+                      None, 40.53, 100.0, 10.0, None, None, "Open", "BrokerageLink"]]
+    table = FakeTable(headers, existing_rows)
+    app = FakeApp([])
+    book = FakeBook(str(workbook_path.resolve()), table, app)
+    app.books.append(book)
+
+    monkeypatch.setattr(writer, "xw", FakeXw(app))
+
+    close = CanonicalTrade(
+        lot_id="close-1",
+        trade_id="",
+        underlying="XOMX",
+        symbol="XOMX",
+        open_date=None,
+        exp_date=None,
+        call_or_put=None,
+        side="C",
+        strike=None,
+        stock_price_open=None,
+        premium=None,
+        quantity=40.0,
+        fees=1.0,
+        exit_price=46.4615,
+        close_date=date(2026, 8, 10),
+        account="BrokerageLink",
+        stock="XOMX",
+        status="Closed",
+    )
+
+    written = writer.write_trades(workbook_path, TABLE_NAME, [close])
+
+    assert written == 1
+    new_row = table.added_rows[0]
+    # 40 of the row's original 100-share, $10 opening fees is $4.00, plus the
+    # incoming close ticket's own $1.00 fee.
+    assert new_row[10] == pytest.approx(5.0)  # Fees
+
+    updated_row = table.DataBodyRange.Value[0]
+    assert updated_row[8] == 60.0  # C (quantity) reduced
+    # The remaining 60 shares keep their proportional $6.00 share of the
+    # original opening fees.
+    assert updated_row[9] == pytest.approx(6.0)  # Fees
+
+
+def test_write_trades_skips_reprocessed_partial_close_split(monkeypatch: Any, tmp_path: Path) -> None:
+    """Re-importing a closing ticket that was already reconciled into a split
+    row in a previous run must not shrink the (already-shrunk) open row a
+    second time."""
+    workbook_path = tmp_path / "ledger.xlsx"
+    workbook_path.write_text("placeholder", encoding="utf-8")
+
+    headers = ["Stock", "Stock Symbol", "Open Date", "Exp Date", "Call or Put", "B/S",
+               "Strike Price", "Premium", "C", "Fees", "Exit Price", "Close Date", "Status", "Account"]
+    # The open row was already shrunk from 151 to 101 by a prior run's first
+    # close, and the split "Closed" row for the first 50-share close already
+    # exists in the table (composite key already present).
+    existing_rows = [
+        ["XOMX", "XOMX", date(2026, 6, 3), None, None, "C",
+         None, 40.53, 101.0, None, None, None, "Open", "BrokerageLink"],
+        ["XOMX", "XOMX", date(2026, 6, 3), None, None, "C",
+         None, 40.53, 50.0, None, 46.4615, date(2026, 8, 10), "Closed", "BrokerageLink"],
+    ]
+    table = FakeTable(headers, existing_rows)
+    app = FakeApp([])
+    book = FakeBook(str(workbook_path.resolve()), table, app)
+    app.books.append(book)
+
+    monkeypatch.setattr(writer, "xw", FakeXw(app))
+
+    # Re-imported ticket for the same 50-share close (no Lot ID column here,
+    # so dedup relies on the composite key derived after merging open fields).
+    duplicate_close = CanonicalTrade(
+        lot_id="close-1",
+        trade_id="",
+        underlying="XOMX",
+        symbol="XOMX",
+        open_date=None,
+        exp_date=None,
+        call_or_put=None,
+        side="C",
+        strike=None,
+        stock_price_open=None,
+        premium=None,
+        quantity=50.0,
+        fees=None,
+        exit_price=46.4615,
+        close_date=date(2026, 8, 10),
+        account="BrokerageLink",
+        stock="XOMX",
+        status="Closed",
+    )
+
+    written = writer.write_trades(workbook_path, TABLE_NAME, [duplicate_close])
+
+    assert written == 0
+    assert len(table.added_rows) == 0
+    # The still-open row must remain untouched at 101 shares.
+    assert table.DataBodyRange.Value[0][8] == 101.0
+
+
+def test_write_trades_prefers_exact_quantity_match_over_partial_candidate(
+    monkeypatch: Any, tmp_path: Path
+) -> None:
+    """When both an exact-quantity row and a larger, partially-open row could
+    satisfy a close, the exact match must be closed outright rather than
+    treated as ambiguous or folded into a partial-close split."""
+    workbook_path = tmp_path / "ledger.xlsx"
+    workbook_path.write_text("placeholder", encoding="utf-8")
+
+    headers = ["Stock", "Stock Symbol", "Open Date", "Exp Date", "Call or Put", "B/S",
+               "Strike Price", "Premium", "C", "Fees", "Exit Price", "Close Date", "Status", "Account"]
+    existing_rows = [
+        ["XOMX", "XOMX", date(2026, 6, 1), None, None, "C",
+         None, 40.53, 50.0, None, None, None, "Open", "BrokerageLink"],
+        ["XOMX", "XOMX", date(2026, 6, 3), None, None, "C",
+         None, 41.00, 100.0, None, None, None, "Open", "BrokerageLink"],
+    ]
+    table = FakeTable(headers, existing_rows)
+    app = FakeApp([])
+    book = FakeBook(str(workbook_path.resolve()), table, app)
+    app.books.append(book)
+
+    monkeypatch.setattr(writer, "xw", FakeXw(app))
+
+    close = CanonicalTrade(
+        lot_id="close-1",
+        trade_id="",
+        underlying="XOMX",
+        symbol="XOMX",
+        open_date=None,
+        exp_date=None,
+        call_or_put=None,
+        side="C",
+        strike=None,
+        stock_price_open=None,
+        premium=None,
+        quantity=50.0,
+        fees=None,
+        exit_price=46.4615,
+        close_date=date(2026, 8, 10),
+        account="BrokerageLink",
+        stock="XOMX",
+        status="Closed",
+    )
+
+    written = writer.write_trades(workbook_path, TABLE_NAME, [close])
+
+    assert written == 1
+    assert len(table.added_rows) == 0  # No split row — the exact match closed in place.
+
+    updated_rows = table.DataBodyRange.Value
+    assert updated_rows[0][8] == 50.0  # The 50-share row closed exactly.
+    assert updated_rows[0][10] == 46.4615  # Exit Price
+    assert updated_rows[0][11] == date(2026, 8, 10)  # Close Date
+    assert updated_rows[0][12] == "Closed"  # Status
+    # The 100-share row is left untouched and still open.
+    assert updated_rows[1][8] == 100.0
+    assert updated_rows[1][12] == "Open"
+
+
 def test_write_trades_preserves_existing_stock_cell_when_updating_row(monkeypatch: Any, tmp_path: Path) -> None:
     workbook_path = tmp_path / "ledger.xlsx"
     workbook_path.write_text("placeholder", encoding="utf-8")
