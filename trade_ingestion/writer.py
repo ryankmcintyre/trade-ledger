@@ -491,6 +491,12 @@ def _row_matches_trade(
         if row_account not in (None, "") and str(row_account).strip() != str(trade.account or "").strip():
             return False
 
+    lot_id_index = headers.index(LOT_ID_COLUMN) if LOT_ID_COLUMN in headers else None
+    if trade.open_date is not None and trade.lot_id and lot_id_index is not None and lot_id_index < len(row):
+        row_lot_id = row[lot_id_index]
+        if row_lot_id not in (None, "") and str(row_lot_id).strip() != trade.lot_id.strip():
+            return False
+
     strike_index = col_indices.get("Strike Price")
     if strike_index is not None and strike_index < len(row) and trade.strike is not None:
         row_strike = row[strike_index]
