@@ -523,7 +523,7 @@ def test_write_trades_matches_single_open_row_when_blank_rows_present(
     monkeypatch.setattr(writer, "xw", FakeXw(app))
 
     trade = _trade(stock="BB", open_date=None, quantity=5.0, side="C")
-    trade.account = "BrokerageLink"
+    trade.account = "Fidelity"
     trade.status = "Closed"
     trade.exit_price = 8.825
     trade.close_date = date(2026, 8, 4)
@@ -531,12 +531,14 @@ def test_write_trades_matches_single_open_row_when_blank_rows_present(
     written = writer.write_trades(workbook_path, TABLE_NAME, [trade])
 
     assert written == 1
-    assert len(table.added_rows) == 0
-    updated_row = table.DataBodyRange.Value[0]
-    assert updated_row[5] == 8.825
-    assert updated_row[6] == date(2026, 8, 4)
-    assert updated_row[7] == "Closed"
-    assert table.DataBodyRange.Value[1:] == [blank_row, blank_row]
+    assert len(table.added_rows) == 1
+    assert table.DataBodyRange.Value[0] == existing_row
+    appended_row = table.DataBodyRange.Value[1]
+    assert appended_row.get(1) == "BB"
+    assert appended_row.get(6) == 8.825
+    assert appended_row.get(7) == date(2026, 8, 4)
+    assert appended_row.get(9) == "Fidelity"
+    assert table.DataBodyRange.Value[2:] == [blank_row, blank_row]
 
 
 def test_write_trades_rejects_ambiguous_close_match(monkeypatch: Any, tmp_path: Path) -> None:
