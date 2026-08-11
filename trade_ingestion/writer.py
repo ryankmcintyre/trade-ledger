@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date
 from pathlib import Path
 from typing import Any, Callable, TypeVar
@@ -18,7 +18,7 @@ from constants import (
     STOCKS_SERVICE_ID,
     TABLE_NAME,
 )
-from trade_ingestion.models import CanonicalTrade
+from trade_ingestion.models import CanonicalTrade, make_trade_id
 from trade_ingestion.retry import resolve_with_retry
 
 try:  # pragma: no cover - pywin32 is only importable on Windows
@@ -41,6 +41,10 @@ _COM_RETRY_ATTEMPTS = 5
 _COM_RETRY_BASE_DELAY = 0.2
 
 T = TypeVar("T")
+
+# Tolerance for floating-point quantity comparisons when reconciling closes
+# against existing open rows (mirrors matcher.MATCH_EPSILON).
+MATCH_EPSILON = 1e-9
 
 
 class ComRetryExhaustedError(RuntimeError):
@@ -161,10 +165,65 @@ def write_trades_detailed(
         pending: list[CanonicalTrade] = []
         updated_rows = 0
         for trade in trades:
-            update_row_index = _find_existing_row_to_update(table, headers, trade)
-            if update_row_index is not None:
-                _update_existing_trade_row(sheet, table, headers, header_positions, update_row_index, trade)
-                updated_rows += 1
+            match = _find_existing_row_to_update(table, headers, trade)
+            if match is not None:
+                row_index, row = match
+                remaining_quantity = _remaining_open_quantity(row, headers, trade.quantity)
+                if remaining_quantity is not None and remaining_quantity > MATCH_EPSILON:
+                    # Partial close: the matched row's open quantity is larger than what
+                    # this close accounts for (e.g. two separate sell tickets closing a
+                    # single larger open lot). The closed portion is written as its own
+                    # new row carrying the original open-side data, so the composite
+                    # dedup key (when there is no Lot ID column) must be derived only
+                    # after merging those open-side fields in.
+                    split_trade = _merge_open_fields_from_row(trade, row, headers)
+
+                    row_quantity = _row_quantity(row, headers)
+                    row_fees = _row_fees(row, headers)
+                    open_fee_share = _allocate_fee(row_fees, row_quantity, remaining_quantity)
+                    close_fee_share = _allocate_fee(row_fees, row_quantity, trade.quantity)
+                    if close_fee_share is not None:
+                        split_trade = replace(split_trade, fees=(split_trade.fees or 0.0) + close_fee_share)
+
+                    key = _make_dedup_key(split_trade, headers)
+                    if key in existing_keys:
+                        # Already reconciled in a previous run/import — re-importing the
+                        # same closing ticket must not shrink the (already-shrunk) open
+                        # row a second time.
+                        continue
+
+                    # Shrink the existing row down to the quantity still open, carrying
+                    # forward its proportional share of the row's original opening fees.
+                    _reduce_existing_row_quantity(
+                        sheet,
+                        table,
+                        headers,
+                        header_positions,
+                        row_index,
+                        remaining_quantity,
+                        remaining_fees=open_fee_share,
+                    )
+                    pending.append(split_trade)
+                    existing_keys.add(key)
+                else:
+                    exact_trade = trade
+                    if trade.open_date is None:
+                        existing_open_fees = _row_fees(row, headers)
+                        if existing_open_fees is not None:
+                            exact_trade = replace(
+                                trade, fees=existing_open_fees + (trade.fees or 0.0)
+                            )
+                    # Register this close's key (with the row's open-side fields
+                    # merged in, matching the split path) so re-importing the same
+                    # ticket after the row is fully closed — and thus no longer an
+                    # open candidate — is recognized as already reconciled.
+                    existing_keys.add(
+                        _make_dedup_key(_merge_open_fields_from_row(trade, row, headers), headers)
+                    )
+                    _update_existing_trade_row(
+                        sheet, table, headers, header_positions, row_index, exact_trade
+                    )
+                    updated_rows += 1
                 continue
 
             key = _make_dedup_key(trade, headers)
@@ -376,10 +435,16 @@ def _make_dedup_key(trade: CanonicalTrade, headers: list[str]) -> str:
     dedup discriminator — is used directly so that legitimate distinct lots (e.g.
     two same-day trades on the same contract/side/quantity) are never collapsed.
     Otherwise falls back to a composite key built from DEDUP_COLUMNS, for
-    workbooks/rows written before the Lot ID column existed.
+    workbooks/rows written before the Lot ID column existed. Close events
+    (trades carrying a Close Date/Exit Price — including a partial-close split
+    merged with its open row's fields) additionally include close-side
+    discriminators, so that two distinct close tickets against the same open
+    lot (e.g. equal quantities closed on different dates) never collide.
     """
     if LOT_ID_COLUMN in headers and trade.lot_id:
         return f"{_LOT_ID_KEY_PREFIX}{trade.lot_id}"
+    if trade.close_date is not None or trade.exit_price is not None:
+        return _make_close_composite_dedup_key(trade)
     return _make_composite_dedup_key(trade)
 
 
@@ -400,12 +465,33 @@ def _make_composite_dedup_key(trade: CanonicalTrade) -> str:
     return "|".join(parts)
 
 
-def _find_existing_row_to_update(table: Any, headers: list[str], trade: CanonicalTrade) -> int | None:
-    """Return the 1-based table row index for a matching open row to update.
+def _make_close_composite_dedup_key(trade: CanonicalTrade) -> str:
+    """Build a composite dedup key for a close event.
+
+    Extends `_make_composite_dedup_key` with close-side discriminators (Close
+    Date, Exit Price) so the key can be reconstructed identically both from the
+    incoming close ticket (merged with the open row's fields, before that row
+    is mutated) and from the already-persisted closed/split row on a later run
+    (see `_existing_dedup_keys`), instead of relying solely on open-side fields
+    that two distinct close tickets against the same open lot can share.
+    """
+    base = _make_composite_dedup_key(trade)
+    close_date = trade.close_date.isoformat() if trade.close_date else ""
+    exit_price = f"{trade.exit_price:g}" if trade.exit_price is not None else ""
+    return f"{base}|{close_date}|{exit_price}"
+
+
+def _find_existing_row_to_update(
+    table: Any, headers: list[str], trade: CanonicalTrade
+) -> tuple[int, list[Any]] | None:
+    """Return the (1-based table row index, row values) for a matching open row.
 
     Close-only trades can be reconciled to an existing open position in the table
     even when the incoming trade has no Open Date value of its own; in that case we
-    fall back to matching on the row's stock/side/quantity/account values.
+    fall back to matching on the row's stock/side/quantity/account values. A row
+    whose open quantity is greater than the incoming close's quantity (e.g. two
+    separate closing tickets against one larger open lot) is also considered a
+    match — the caller is responsible for splitting the partial close.
     """
     if trade.close_date is None and trade.exit_price is None:
         return None
@@ -415,7 +501,7 @@ def _find_existing_row_to_update(table: Any, headers: list[str], trade: Canonica
     if not rows:
         return None
 
-    candidates: list[int] = []
+    candidates: list[tuple[int, list[Any]]] = []
     col_indices = {col_name: headers.index(col_name) if col_name in headers else None for col_name in DEDUP_COLUMNS}
     symbol_index = headers.index(STOCK_SYMBOL_COLUMN) if STOCK_SYMBOL_COLUMN in headers else None
     account_index = headers.index("Account") if "Account" in headers else None
@@ -427,17 +513,180 @@ def _find_existing_row_to_update(table: Any, headers: list[str], trade: Canonica
         if not _row_matches_trade(row, headers, trade, col_indices, symbol_index, account_index):
             continue
 
-        candidates.append(row_index + 1)
+        candidates.append((row_index + 1, row))
 
-    # Collect all potential matches before raising so an ambiguous reconciliation
-    # is surfaced consistently rather than silently falling back to appending.
-    if len(candidates) > 1:
+    if not candidates:
+        return None
+
+    # `_row_matches_trade` never compares Exp Date/Call or Put, so distinct
+    # option contracts (e.g. different expiries, or a put vs. a call) can both
+    # reach this point sharing the same underlying/side/strike/quantity
+    # profile. Narrow to rows whose option identifiers agree with the incoming
+    # trade *before* considering exact-quantity/uniqueness, so a same-quantity
+    # row for the wrong contract is never preferred over the correct contract
+    # (which may hold a different, larger quantity).
+    option_candidates = _filter_candidates_by_option_fields(candidates, headers, trade)
+
+    # An exact-quantity match is unambiguous even when a larger, partially-open
+    # row also satisfies the relaxed `row_quantity >= close_quantity` comparison
+    # in `_row_matches_trade` (e.g. rows open for 50 and 100 shares both "match"
+    # a 50-share close). Prefer the exact match so it closes outright instead of
+    # being folded into a partial-close split.
+    exact_candidates = [
+        (idx, row) for idx, row in option_candidates if _is_exact_quantity_match(row, headers, trade.quantity)
+    ]
+    if exact_candidates:
+        if len(exact_candidates) > 1:
+            context = trade.trade_id or trade.lot_id or trade.symbol or "trade"
+            raise ValueError(
+                f"Multiple existing rows matched close trade '{context}'; cannot reconcile automatically"
+            )
+        return exact_candidates[0]
+
+    if len(option_candidates) == 1:
+        return option_candidates[0]
+
+    if trade.exp_date is not None or trade.call_or_put:
         context = trade.trade_id or trade.lot_id or trade.symbol or "trade"
         raise ValueError(
             f"Multiple existing rows matched close trade '{context}'; cannot reconcile automatically"
         )
 
-    return candidates[0] if candidates else None
+    # TODO: Several partially-open rows qualify for this close and none matches
+    # exactly. Default to FIFO (earliest Open Date first, ties broken by table
+    # row order) for review — the issue does not specify a required order when
+    # more than one open lot could absorb the same close.
+    return _fifo_earliest_candidate(option_candidates, headers)
+
+
+def _filter_candidates_by_option_fields(
+    candidates: list[tuple[int, list[Any]]], headers: list[str], trade: CanonicalTrade
+) -> list[tuple[int, list[Any]]]:
+    """Narrow `candidates` to rows whose Exp Date/Call or Put agree with `trade`.
+
+    `_row_matches_trade` never compares these fields, so equity candidates are
+    returned unchanged; only applies when the incoming trade actually carries
+    option identifiers.
+    """
+    if trade.exp_date is None and not trade.call_or_put:
+        return candidates
+
+    exp_date_index = headers.index("Exp Date") if "Exp Date" in headers else None
+    call_put_index = headers.index("Call or Put") if "Call or Put" in headers else None
+
+    filtered: list[tuple[int, list[Any]]] = []
+    for idx, row in candidates:
+        if trade.exp_date is not None and exp_date_index is not None and exp_date_index < len(row):
+            row_value = row[exp_date_index]
+            if row_value not in (None, ""):
+                if isinstance(row_value, (int, float)):
+                    row_exp_date = _excel_serial_to_date(float(row_value))
+                elif hasattr(row_value, "date") and callable(getattr(row_value, "date", None)):
+                    row_exp_date = row_value.date()
+                elif isinstance(row_value, date):
+                    row_exp_date = row_value
+                else:
+                    row_exp_date = None
+                if row_exp_date is not None and row_exp_date != trade.exp_date:
+                    continue
+
+        if trade.call_or_put and call_put_index is not None and call_put_index < len(row):
+            row_value = row[call_put_index]
+            if row_value not in (None, "") and str(row_value).strip() != trade.call_or_put.strip():
+                continue
+
+        filtered.append((idx, row))
+    return filtered
+
+
+def _row_quantity(row: list[Any], headers: list[str]) -> float | None:
+    """Return the row's "C" (quantity) value, or None if unavailable/unreadable."""
+    quantity_index = headers.index("C") if "C" in headers else None
+    if quantity_index is None or quantity_index >= len(row):
+        return None
+    row_quantity_raw = row[quantity_index]
+    if row_quantity_raw in (None, ""):
+        return None
+    try:
+        return float(row_quantity_raw)
+    except (TypeError, ValueError):
+        return None
+
+
+def _row_fees(row: list[Any], headers: list[str]) -> float | None:
+    """Return the row's "Fees" value, or None if unavailable/unreadable."""
+    fees_index = headers.index("Fees") if "Fees" in headers else None
+    if fees_index is None or fees_index >= len(row):
+        return None
+    value = row[fees_index]
+    if value in (None, ""):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _allocate_fee(total_fee: float | None, quantity_pool: float | None, quantity_slice: float) -> float | None:
+    """Allocate a proportional share of `total_fee` for `quantity_slice` out of `quantity_pool`.
+
+    Mirrors matcher._allocate_fee's proportional-by-quantity allocation so that
+    splitting an existing open row's fees follows the same convention as the
+    matcher's own partial-lot fee allocation.
+    """
+    if total_fee is None or quantity_pool is None:
+        return None
+    if quantity_pool <= MATCH_EPSILON:
+        return None
+    return total_fee * (quantity_slice / quantity_pool)
+
+
+def _is_exact_quantity_match(row: list[Any], headers: list[str], close_quantity: float) -> bool:
+    row_quantity = _row_quantity(row, headers)
+    if row_quantity is None:
+        return False
+    return abs(row_quantity - close_quantity) <= MATCH_EPSILON
+
+
+def _fifo_earliest_candidate(
+    candidates: list[tuple[int, list[Any]]], headers: list[str]
+) -> tuple[int, list[Any]]:
+    """Return the candidate with the earliest Open Date (ties broken by row order)."""
+    open_date_index = headers.index("Open Date") if "Open Date" in headers else None
+
+    def _sort_key(candidate: tuple[int, list[Any]]) -> date:
+        _, row = candidate
+        if open_date_index is None or open_date_index >= len(row):
+            return date.max
+        value = row[open_date_index]
+        if isinstance(value, (int, float)):
+            parsed = _excel_serial_to_date(float(value))
+        elif hasattr(value, "date") and callable(getattr(value, "date", None)):
+            parsed = value.date()
+        elif isinstance(value, date):
+            parsed = value
+        else:
+            parsed = None
+        return parsed if parsed is not None else date.max
+
+    return min(candidates, key=_sort_key)
+
+
+def _remaining_open_quantity(row: list[Any], headers: list[str], close_quantity: float) -> float | None:
+    """Return the open quantity left on `row` after applying `close_quantity`.
+
+    Returns None when the row's quantity is unavailable/unreadable (in which case
+    the caller should treat the match as a full close, matching prior behavior),
+    or when the close accounts for the entire open quantity (nothing remains open).
+    """
+    row_quantity = _row_quantity(row, headers)
+    if row_quantity is None:
+        return None
+
+    remaining = row_quantity - close_quantity
+    if remaining <= MATCH_EPSILON:
+        return None
+    return remaining
 
 
 def _row_has_close_values(row: list[Any], headers: list[str]) -> bool:
@@ -483,7 +732,11 @@ def _row_matches_trade(
                 row_quantity_value = float(row_quantity)
             except (TypeError, ValueError):
                 return False
-            if abs(row_quantity_value - float(trade.quantity)) > 1e-9:
+            # A row can reconcile a close whose quantity is less than or equal to
+            # the row's open quantity — e.g. two separate closing tickets against
+            # one larger open lot. A close quantity greater than what's open on
+            # the row can never be satisfied by it.
+            if row_quantity_value - float(trade.quantity) < -MATCH_EPSILON:
                 return False
 
     if account_index is not None and account_index < len(row):
@@ -526,6 +779,102 @@ def _row_matches_trade(
                 return False
 
     return True
+
+
+def _reduce_existing_row_quantity(
+    sheet: Any,
+    table: Any,
+    headers: list[str],
+    header_positions: dict[str, int],
+    row_index: int,
+    remaining_quantity: float,
+    remaining_fees: float | None = None,
+) -> None:
+    """Shrink an existing open row's quantity (and, if provided, its Fees) to
+    what's still open.
+
+    Used when a close only accounts for part of an existing open row's
+    quantity (e.g. two separate closing tickets against one larger open
+    lot). The row is left open — no close-side columns are touched.
+    `remaining_fees` is the row's own opening fees reallocated to the portion
+    that stays open (see `_allocate_fee`); when None the Fees cell is left
+    untouched.
+    """
+    quantity_column = header_positions.get("C")
+    fees_column = header_positions.get("Fees")
+    if quantity_column is None and fees_column is None:
+        return
+
+    list_row = _call_with_com_retry(lambda: table.ListRows(row_index))
+    base_row = _call_with_com_retry(lambda: list_row.Range.Row)
+    base_column = _call_with_com_retry(lambda: list_row.Range.Column)
+
+    if quantity_column is not None:
+
+        def _write_quantity() -> None:
+            sheet.range((base_row, base_column + quantity_column - 1)).value = remaining_quantity
+
+        _call_with_com_retry(_write_quantity)
+
+    if fees_column is not None and remaining_fees is not None:
+
+        def _write_fees() -> None:
+            sheet.range((base_row, base_column + fees_column - 1)).value = remaining_fees
+
+        _call_with_com_retry(_write_fees)
+
+
+def _merge_open_fields_from_row(trade: CanonicalTrade, row: list[Any], headers: list[str]) -> CanonicalTrade:
+    """Return a copy of `trade` enriched with open-side data from `row`.
+
+    Used when a close-only trade (no matching open in the current import) is
+    reconciled against part of an existing open row's quantity: the trade is
+    written as its own new row, so it needs the original open-side fields
+    (open date, strike, premium, etc.) carried over from the row it's
+    partially closing, not just the incoming close's own fields.
+    """
+    date_fields = {"open_date", "exp_date"}
+    float_fields = {"strike", "stock_price_open", "premium"}
+    field_columns: tuple[tuple[str, str], ...] = (
+        ("open_date", "Open Date"),
+        ("exp_date", "Exp Date"),
+        ("call_or_put", "Call or Put"),
+        ("side", "B/S"),
+        ("strike", "Strike Price"),
+        ("stock_price_open", "Stock Price DOC"),
+        ("premium", "Premium"),
+        ("account", "Account"),
+    )
+
+    updates: dict[str, Any] = {}
+    for field_name, col_name in field_columns:
+        if col_name not in headers:
+            continue
+        col_index = headers.index(col_name)
+        if col_index >= len(row):
+            continue
+        value = row[col_index]
+        if value in (None, ""):
+            continue
+        if field_name in date_fields:
+            if isinstance(value, (int, float)):
+                value = _excel_serial_to_date(float(value))
+            elif hasattr(value, "date") and callable(getattr(value, "date", None)):
+                value = value.date()
+            if value is None:
+                continue
+        elif field_name in float_fields:
+            try:
+                value = float(value)
+            except (TypeError, ValueError):
+                continue
+        updates[field_name] = value
+
+    if not updates:
+        return trade
+
+    merged = replace(trade, **updates)
+    return replace(merged, trade_id=make_trade_id(merged))
 
 
 def _update_existing_trade_row(
@@ -580,7 +929,11 @@ def _existing_dedup_keys(table: Any, headers: list[str]) -> set[str]:
 
     Rows with a Lot ID value are keyed by that value directly (the primary dedup
     discriminator); rows without one (e.g. written before the Lot ID column
-    existed) fall back to the composite key built from DEDUP_COLUMNS.
+    existed) fall back to the composite key built from DEDUP_COLUMNS. Rows that
+    carry close info (Close Date/Exit Price) additionally get a close-side key
+    with those discriminators appended, matching `_make_close_composite_dedup_key`,
+    so a re-imported close ticket for an already-persisted closed/split row is
+    recognized even though the row itself no longer qualifies as an open candidate.
     """
     values: set[str] = set()
     data_range = getattr(table, "DataBodyRange", None)
@@ -590,6 +943,8 @@ def _existing_dedup_keys(table: Any, headers: list[str]) -> set[str]:
     rows = _normalize_table_rows(data_range.Value, len(headers))
 
     lot_id_index = headers.index(LOT_ID_COLUMN) if LOT_ID_COLUMN in headers else None
+    close_date_index = headers.index("Close Date") if "Close Date" in headers else None
+    exit_price_index = headers.index("Exit Price") if "Exit Price" in headers else None
 
     # Find column indices for dedup columns
     col_indices: dict[str, int | None] = {}
@@ -628,10 +983,57 @@ def _existing_dedup_keys(table: Any, headers: list[str]) -> set[str]:
             else:
                 parts.append(str(val))
         key = "|".join(parts)
-        if any(p for p in parts):
+        if not any(p for p in parts):
+            continue
+
+        close_date_val = (
+            row[close_date_index] if close_date_index is not None and close_date_index < len(row) else None
+        )
+        exit_price_val = (
+            row[exit_price_index] if exit_price_index is not None and exit_price_index < len(row) else None
+        )
+        if close_date_val not in (None, "") or exit_price_val not in (None, ""):
+            close_date_str = _row_date_isoformat(close_date_val)
+            exit_price_str = ""
+            if exit_price_val not in (None, ""):
+                try:
+                    exit_price_str = f"{float(exit_price_val):g}"
+                except (TypeError, ValueError):
+                    exit_price_str = str(exit_price_val)
+            values.add(f"{key}|{close_date_str}|{exit_price_str}")
+
+            # A re-imported close ticket that never matches an open row (e.g.
+            # because the row it originally reconciled is now fully closed and
+            # therefore excluded as an open candidate) builds its key from its
+            # own fields only, without the row's Open Date merged in. Also
+            # index the same close discriminators keyed off a blank Open Date
+            # so that lookup still finds this row.
+            open_date_col_index = col_indices.get("Open Date")
+            if open_date_col_index is not None:
+                open_date_part_index = DEDUP_COLUMNS.index("Open Date")
+                if parts[open_date_part_index]:
+                    blank_open_parts = list(parts)
+                    blank_open_parts[open_date_part_index] = ""
+                    blank_open_key = "|".join(blank_open_parts)
+                    values.add(f"{blank_open_key}|{close_date_str}|{exit_price_str}")
+        else:
             values.add(key)
 
     return values
+
+
+def _row_date_isoformat(value: Any) -> str:
+    """Return the ISO date string for a raw cell `value`, or "" if unavailable."""
+    if value in (None, ""):
+        return ""
+    if isinstance(value, (int, float)):
+        parsed = _excel_serial_to_date(float(value))
+        return parsed.isoformat() if parsed else ""
+    if hasattr(value, "date") and callable(getattr(value, "date", None)):
+        return value.date().isoformat()
+    if isinstance(value, date):
+        return value.isoformat()
+    return str(value)
 
 
 def _row_ticker(row: list[Any], stock_index: int | None, symbol_index: int | None) -> str:
