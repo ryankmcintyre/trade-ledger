@@ -135,7 +135,12 @@ class FakeListRows:
     def Count(self) -> int:
         return len(self.table.DataBodyRange.Value or [])
 
-    def __getitem__(self, index: int) -> FakeListRow:
+    def __call__(self, index: int) -> FakeListRow:
+        # NOTE: real COM collections (and xlwings' COMRetryObjectWrapper,
+        # NOTE: which does not implement __getitem__) are indexed via call
+        # NOTE: syntax, e.g. table.ListRows(index) — not table.ListRows[index].
+        # NOTE: This fake intentionally omits __getitem__ so tests catch any
+        # NOTE: regression back to bracket-subscript access.
         if index < 1 or index > self.Count:
             raise IndexError(index)
         row_number = index + 1

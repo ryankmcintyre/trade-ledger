@@ -536,7 +536,12 @@ def _update_existing_trade_row(
     row_index: int,
     trade: CanonicalTrade,
 ) -> None:
-    list_row = _call_with_com_retry(lambda: table.ListRows[row_index])
+    # NOTE: table.ListRows is a COM collection wrapped by xlwings'
+    # NOTE: COMRetryObjectWrapper, which does not implement __getitem__, so
+    # NOTE: bracket subscription (table.ListRows[row_index]) raises
+    # NOTE: "'COMRetryObjectWrapper' object is not subscriptable". COM
+    # NOTE: collections are indexed via call syntax instead.
+    list_row = _call_with_com_retry(lambda: table.ListRows(row_index))
     base_row = _call_with_com_retry(lambda: list_row.Range.Row)
     base_column = _call_with_com_retry(lambda: list_row.Range.Column)
 
