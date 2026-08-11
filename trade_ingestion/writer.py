@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import time
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from datetime import date
 from pathlib import Path
 from typing import Any, Callable, TypeVar
@@ -18,7 +18,7 @@ from constants import (
     STOCKS_SERVICE_ID,
     TABLE_NAME,
 )
-from trade_ingestion.models import CanonicalTrade
+from trade_ingestion.models import CanonicalTrade, make_trade_id
 from trade_ingestion.retry import resolve_with_retry
 
 try:  # pragma: no cover - pywin32 is only importable on Windows
@@ -41,6 +41,10 @@ _COM_RETRY_ATTEMPTS = 5
 _COM_RETRY_BASE_DELAY = 0.2
 
 T = TypeVar("T")
+
+# Tolerance for floating-point quantity comparisons when reconciling closes
+# against existing open rows (mirrors matcher.MATCH_EPSILON).
+MATCH_EPSILON = 1e-9
 
 
 class ComRetryExhaustedError(RuntimeError):
@@ -161,10 +165,26 @@ def write_trades_detailed(
         pending: list[CanonicalTrade] = []
         updated_rows = 0
         for trade in trades:
-            update_row_index = _find_existing_row_to_update(table, headers, trade)
-            if update_row_index is not None:
-                _update_existing_trade_row(sheet, table, headers, header_positions, update_row_index, trade)
-                updated_rows += 1
+            match = _find_existing_row_to_update(table, headers, trade)
+            if match is not None:
+                row_index, row = match
+                remaining_quantity = _remaining_open_quantity(row, headers, trade.quantity)
+                if remaining_quantity is not None and remaining_quantity > MATCH_EPSILON:
+                    # Partial close: the matched row's open quantity is larger than what
+                    # this close accounts for (e.g. two separate sell tickets closing a
+                    # single larger open lot). Shrink the existing row down to the
+                    # quantity still open, and write the closed portion as its own new
+                    # row carrying the original open-side data.
+                    _reduce_existing_row_quantity(
+                        sheet, table, headers, header_positions, row_index, remaining_quantity
+                    )
+                    split_trade = _merge_open_fields_from_row(trade, row, headers)
+                    key = _make_dedup_key(split_trade, headers)
+                    pending.append(split_trade)
+                    existing_keys.add(key)
+                else:
+                    _update_existing_trade_row(sheet, table, headers, header_positions, row_index, trade)
+                    updated_rows += 1
                 continue
 
             key = _make_dedup_key(trade, headers)
@@ -400,12 +420,17 @@ def _make_composite_dedup_key(trade: CanonicalTrade) -> str:
     return "|".join(parts)
 
 
-def _find_existing_row_to_update(table: Any, headers: list[str], trade: CanonicalTrade) -> int | None:
-    """Return the 1-based table row index for a matching open row to update.
+def _find_existing_row_to_update(
+    table: Any, headers: list[str], trade: CanonicalTrade
+) -> tuple[int, list[Any]] | None:
+    """Return the (1-based table row index, row values) for a matching open row.
 
     Close-only trades can be reconciled to an existing open position in the table
     even when the incoming trade has no Open Date value of its own; in that case we
-    fall back to matching on the row's stock/side/quantity/account values.
+    fall back to matching on the row's stock/side/quantity/account values. A row
+    whose open quantity is greater than the incoming close's quantity (e.g. two
+    separate closing tickets against one larger open lot) is also considered a
+    match — the caller is responsible for splitting the partial close.
     """
     if trade.close_date is None and trade.exit_price is None:
         return None
@@ -415,7 +440,7 @@ def _find_existing_row_to_update(table: Any, headers: list[str], trade: Canonica
     if not rows:
         return None
 
-    candidates: list[int] = []
+    candidates: list[tuple[int, list[Any]]] = []
     col_indices = {col_name: headers.index(col_name) if col_name in headers else None for col_name in DEDUP_COLUMNS}
     symbol_index = headers.index(STOCK_SYMBOL_COLUMN) if STOCK_SYMBOL_COLUMN in headers else None
     account_index = headers.index("Account") if "Account" in headers else None
@@ -427,7 +452,7 @@ def _find_existing_row_to_update(table: Any, headers: list[str], trade: Canonica
         if not _row_matches_trade(row, headers, trade, col_indices, symbol_index, account_index):
             continue
 
-        candidates.append(row_index + 1)
+        candidates.append((row_index + 1, row))
 
     # Collect all potential matches before raising so an ambiguous reconciliation
     # is surfaced consistently rather than silently falling back to appending.
@@ -438,6 +463,30 @@ def _find_existing_row_to_update(table: Any, headers: list[str], trade: Canonica
         )
 
     return candidates[0] if candidates else None
+
+
+def _remaining_open_quantity(row: list[Any], headers: list[str], close_quantity: float) -> float | None:
+    """Return the open quantity left on `row` after applying `close_quantity`.
+
+    Returns None when the row's quantity is unavailable/unreadable (in which case
+    the caller should treat the match as a full close, matching prior behavior),
+    or when the close accounts for the entire open quantity (nothing remains open).
+    """
+    quantity_index = headers.index("C") if "C" in headers else None
+    if quantity_index is None or quantity_index >= len(row):
+        return None
+    row_quantity_raw = row[quantity_index]
+    if row_quantity_raw in (None, ""):
+        return None
+    try:
+        row_quantity = float(row_quantity_raw)
+    except (TypeError, ValueError):
+        return None
+
+    remaining = row_quantity - close_quantity
+    if remaining <= MATCH_EPSILON:
+        return None
+    return remaining
 
 
 def _row_has_close_values(row: list[Any], headers: list[str]) -> bool:
@@ -483,7 +532,11 @@ def _row_matches_trade(
                 row_quantity_value = float(row_quantity)
             except (TypeError, ValueError):
                 return False
-            if abs(row_quantity_value - float(trade.quantity)) > 1e-9:
+            # A row can reconcile a close whose quantity is less than or equal to
+            # the row's open quantity — e.g. two separate closing tickets against
+            # one larger open lot. A close quantity greater than what's open on
+            # the row can never be satisfied by it.
+            if row_quantity_value - float(trade.quantity) < -MATCH_EPSILON:
                 return False
 
     if account_index is not None and account_index < len(row):
@@ -526,6 +579,88 @@ def _row_matches_trade(
                 return False
 
     return True
+
+
+def _reduce_existing_row_quantity(
+    sheet: Any,
+    table: Any,
+    headers: list[str],
+    header_positions: dict[str, int],
+    row_index: int,
+    remaining_quantity: float,
+) -> None:
+    """Shrink an existing open row's quantity to what's still open.
+
+    Used when a close only accounts for part of an existing open row's
+    quantity (e.g. two separate closing tickets against one larger open
+    lot). The row is left open — no close-side columns are touched.
+    """
+    quantity_column = header_positions.get("C")
+    if quantity_column is None:
+        return
+
+    list_row = _call_with_com_retry(lambda: table.ListRows(row_index))
+    base_row = _call_with_com_retry(lambda: list_row.Range.Row)
+    base_column = _call_with_com_retry(lambda: list_row.Range.Column)
+
+    def _write_cell() -> None:
+        sheet.range((base_row, base_column + quantity_column - 1)).value = remaining_quantity
+
+    _call_with_com_retry(_write_cell)
+
+
+def _merge_open_fields_from_row(trade: CanonicalTrade, row: list[Any], headers: list[str]) -> CanonicalTrade:
+    """Return a copy of `trade` enriched with open-side data from `row`.
+
+    Used when a close-only trade (no matching open in the current import) is
+    reconciled against part of an existing open row's quantity: the trade is
+    written as its own new row, so it needs the original open-side fields
+    (open date, strike, premium, etc.) carried over from the row it's
+    partially closing, not just the incoming close's own fields.
+    """
+    date_fields = {"open_date", "exp_date"}
+    float_fields = {"strike", "stock_price_open", "premium"}
+    field_columns: tuple[tuple[str, str], ...] = (
+        ("open_date", "Open Date"),
+        ("exp_date", "Exp Date"),
+        ("call_or_put", "Call or Put"),
+        ("side", "B/S"),
+        ("strike", "Strike Price"),
+        ("stock_price_open", "Stock Price DOC"),
+        ("premium", "Premium"),
+        ("account", "Account"),
+    )
+
+    updates: dict[str, Any] = {}
+    for field_name, col_name in field_columns:
+        if col_name not in headers:
+            continue
+        col_index = headers.index(col_name)
+        if col_index >= len(row):
+            continue
+        value = row[col_index]
+        if value in (None, ""):
+            continue
+        if field_name in date_fields:
+            if isinstance(value, (int, float)):
+                value = _excel_serial_to_date(float(value))
+            elif hasattr(value, "date") and callable(getattr(value, "date", None)):
+                value = value.date()
+            if value is None:
+                continue
+        elif field_name in float_fields:
+            try:
+                value = float(value)
+            except (TypeError, ValueError):
+                continue
+        updates[field_name] = value
+
+    if not updates:
+        return trade
+
+    merged = replace(trade, **updates)
+    merged.trade_id = make_trade_id(merged)
+    return merged
 
 
 def _update_existing_trade_row(

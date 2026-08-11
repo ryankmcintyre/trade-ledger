@@ -641,6 +641,98 @@ def test_write_trades_updates_existing_open_row_for_close_trade(monkeypatch: Any
     assert updated_row[12] == "Closed"
 
 
+def test_write_trades_splits_partial_close_against_larger_open_row(monkeypatch: Any, tmp_path: Path) -> None:
+    """Two separate closing tickets for less than an existing open row's full
+    quantity must reconcile against that row instead of being written as new,
+    open-data-less rows.
+
+    Regression test for https://github.com/ryankmcintyre/trade-ledger/issues/47:
+    an open equity position of 151 shares closed via two sell tickets (50 then
+    101 shares) previously failed to match the existing open row at all (its
+    quantity didn't equal either ticket's quantity), so both were appended as
+    brand new rows with no open-side data.
+    """
+    workbook_path = tmp_path / "ledger.xlsx"
+    workbook_path.write_text("placeholder", encoding="utf-8")
+
+    headers = ["Stock", "Stock Symbol", "Open Date", "Exp Date", "Call or Put", "B/S",
+               "Strike Price", "Premium", "C", "Fees", "Exit Price", "Close Date", "Status", "Account"]
+    existing_rows = [["XOMX", "XOMX", date(2026, 6, 3), None, None, "C",
+                      None, 40.53, 151.0, None, None, None, "Open", "BrokerageLink"]]
+    table = FakeTable(headers, existing_rows)
+    app = FakeApp([])
+    book = FakeBook(str(workbook_path.resolve()), table, app)
+    app.books.append(book)
+
+    monkeypatch.setattr(writer, "xw", FakeXw(app))
+
+    first_close = CanonicalTrade(
+        lot_id="close-1",
+        trade_id="",
+        underlying="XOMX",
+        symbol="XOMX",
+        open_date=None,
+        exp_date=None,
+        call_or_put=None,
+        side="C",
+        strike=None,
+        stock_price_open=None,
+        premium=None,
+        quantity=50.0,
+        fees=None,
+        exit_price=46.4615,
+        close_date=date(2026, 8, 10),
+        account="BrokerageLink",
+        stock="XOMX",
+        status="Closed",
+    )
+    second_close = CanonicalTrade(
+        lot_id="close-2",
+        trade_id="",
+        underlying="XOMX",
+        symbol="XOMX",
+        open_date=None,
+        exp_date=None,
+        call_or_put=None,
+        side="C",
+        strike=None,
+        stock_price_open=None,
+        premium=None,
+        quantity=101.0,
+        fees=None,
+        exit_price=45.7,
+        close_date=date(2026, 8, 10),
+        account="BrokerageLink",
+        stock="XOMX",
+        status="Closed",
+    )
+
+    written = writer.write_trades(workbook_path, TABLE_NAME, [first_close, second_close])
+
+    assert written == 2
+    # The first close is written as its own new row carrying the original
+    # open-side data (Open Date, Premium) from the existing open row.
+    assert len(table.added_rows) == 1
+    new_row = table.added_rows[0]
+    assert new_row[1] == "XOMX"  # Stock
+    assert new_row[3] == date(2026, 6, 3)  # Open Date
+    assert new_row[8] == 40.53  # Premium
+    assert new_row[9] == 50.0  # C (quantity)
+    assert new_row[11] == 46.4615  # Exit Price
+    assert new_row[12] == date(2026, 8, 10)  # Close Date
+    assert new_row[13] == "Closed"  # Status
+
+    # The original open row is fully closed in place by the second ticket:
+    # it was already shrunk to 101 by the first (partial) close, so this
+    # ticket's quantity matches it exactly and its close-side columns are
+    # now populated.
+    updated_row = table.DataBodyRange.Value[0]
+    assert updated_row[8] == 101.0  # C (quantity) reduced then closed exactly
+    assert updated_row[10] == 45.7  # Exit Price
+    assert updated_row[11] == date(2026, 8, 10)  # Close Date
+    assert updated_row[12] == "Closed"  # Status
+
+
 def test_write_trades_preserves_existing_stock_cell_when_updating_row(monkeypatch: Any, tmp_path: Path) -> None:
     workbook_path = tmp_path / "ledger.xlsx"
     workbook_path.write_text("placeholder", encoding="utf-8")
