@@ -1225,7 +1225,7 @@ def _shift_row_positions(positions: dict[Any, int], from_position: int) -> None:
     row that was at or below that position is physically pushed down by one,
     so any previously recorded anchor position must be adjusted to match.
     """
-    for key, position in positions.items():
+    for key, position in list(positions.items()):
         if position >= from_position:
             positions[key] = position + 1
 
@@ -1250,9 +1250,9 @@ def _build_group_last_row_positions(
     if not rows:
         return ticker_last_row, exact_group_last_row
 
-    stock_index = headers.index("Stock") if "Stock" in headers else None
+    stock_index = headers.index(FIELD_TO_COLUMN["stock"]) if FIELD_TO_COLUMN["stock"] in headers else None
     symbol_index = headers.index(STOCK_SYMBOL_COLUMN) if STOCK_SYMBOL_COLUMN in headers else None
-    open_date_index = headers.index("Open Date") if "Open Date" in headers else None
+    open_date_index = headers.index(FIELD_TO_COLUMN["open_date"]) if FIELD_TO_COLUMN["open_date"] in headers else None
 
     for row_index, row in enumerate(rows, start=1):
         ticker = _row_ticker(row, stock_index, symbol_index).strip()

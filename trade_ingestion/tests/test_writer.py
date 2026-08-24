@@ -393,6 +393,85 @@ def test_write_trades_preserves_order_above_trailing_blank_rows(
     assert table.DataBodyRange.Value[3] == blank_row
 
 
+def _row_value(row: Any, column_index: int) -> Any:
+    """Read a 1-based column value from a table row that may be a plain list
+    (existing/original test fixture rows) or a dict (rows newly added via
+    FakeListRows.Add, keyed by 1-based column index — see FakeRowRange)."""
+    if isinstance(row, dict):
+        return row.get(column_index)
+    return row[column_index - 1]
+
+
+def test_write_trades_groups_new_rows_with_matching_ticker_and_open_date(
+    monkeypatch: Any, tmp_path: Path
+) -> None:
+    workbook_path = tmp_path / "ledger.xlsx"
+    workbook_path.write_text("placeholder", encoding="utf-8")
+
+    headers = ["Stock", "Open Date", "B/S", "C"]
+    aapl_existing = ["AAPL", date(2024, 1, 1), "B", 1.0]
+    msft_existing = ["MSFT", date(2024, 1, 1), "B", 1.0]
+    blank_row = [None, None, None, None]
+    table = FakeTable(headers, [aapl_existing, msft_existing, blank_row.copy()])
+    app = FakeApp([])
+    book = FakeBook(str(workbook_path.resolve()), table, app)
+    app.books.append(book)
+
+    monkeypatch.setattr(writer, "xw", FakeXw(app))
+
+    # Same ticker + Open Date as the existing rows, but a different quantity so
+    # neither is treated as a dedup of the existing row.
+    aapl_new = _trade(stock="AAPL", open_date=date(2024, 1, 1), quantity=2.0, lot_id="aapl-new")
+    aapl_new.exit_price = None
+    aapl_new.close_date = None
+    msft_new = _trade(stock="MSFT", open_date=date(2024, 1, 1), quantity=2.0, lot_id="msft-new")
+    msft_new.exit_price = None
+    msft_new.close_date = None
+
+    written = writer.write_trades(workbook_path, TABLE_NAME, [aapl_new, msft_new])
+
+    assert written == 2
+    rows = table.DataBodyRange.Value
+    # New AAPL row is grouped directly after the existing AAPL row, and the new
+    # MSFT row is grouped directly after the (now-shifted) existing MSFT row —
+    # rather than both being appended after the trailing blank row.
+    assert [_row_value(row, 1) for row in rows] == ["AAPL", "AAPL", "MSFT", "MSFT", None]
+    assert [_row_value(row, 2) for row in rows[:4]] == [date(2024, 1, 1)] * 4
+
+
+def test_write_trades_groups_close_only_trade_by_ticker_without_open_date(
+    monkeypatch: Any, tmp_path: Path
+) -> None:
+    workbook_path = tmp_path / "ledger.xlsx"
+    workbook_path.write_text("placeholder", encoding="utf-8")
+
+    headers = ["Stock", "Open Date", "B/S", "C"]
+    aapl_row_1 = ["AAPL", date(2024, 1, 1), "B", 1.0]
+    aapl_row_2 = ["AAPL", date(2024, 1, 5), "B", 1.0]
+    msft_row = ["MSFT", date(2024, 1, 1), "B", 1.0]
+    blank_row = [None, None, None, None]
+    table = FakeTable(headers, [aapl_row_1, aapl_row_2, msft_row, blank_row.copy()])
+    app = FakeApp([])
+    book = FakeBook(str(workbook_path.resolve()), table, app)
+    app.books.append(book)
+
+    monkeypatch.setattr(writer, "xw", FakeXw(app))
+
+    # A closing order with no matching Open Date (quantity too large to
+    # reconcile against either existing AAPL row) — should still be grouped
+    # with the other AAPL rows rather than appended at the end.
+    close_only = _trade(stock="AAPL", open_date=None, quantity=5.0, lot_id="close-only")
+
+    written = writer.write_trades(workbook_path, TABLE_NAME, [close_only])
+
+    assert written == 1
+    rows = table.DataBodyRange.Value
+    assert [_row_value(row, 1) for row in rows] == ["AAPL", "AAPL", "AAPL", "MSFT", None]
+    # The new row is placed right after the last existing AAPL row (2024-01-05),
+    # not after the first one.
+    assert _row_value(rows[2], 2) is None  # close-only trade has no Open Date to write
+
+
 def test_write_trades_inserts_at_start_of_blank_table(
     monkeypatch: Any, tmp_path: Path
 ) -> None:
