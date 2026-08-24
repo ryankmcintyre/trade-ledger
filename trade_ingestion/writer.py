@@ -231,26 +231,14 @@ def write_trades_detailed(
                 pending.append(trade)
                 existing_keys.add(key)
 
-        overall_last_position = _last_populated_row_position(table, headers)
-        ticker_last_row, exact_group_last_row = _build_group_last_row_positions(table, headers)
         stock_column = header_positions.get(FIELD_TO_COLUMN["stock"])
         symbol_column = headers.index(STOCK_SYMBOL_COLUMN) + 1 if STOCK_SYMBOL_COLUMN in headers else None
         failed_conversions: list[str] = []
         conversion_failures: list[ConversionFailure] = []
+        rows = _normalize_table_rows(getattr(table, "DataBodyRange", None).Value, len(headers))
 
         for trade in pending:
-            ticker = str(trade.underlying or trade.stock or "").strip()
-            if trade.open_date is not None and ticker:
-                # Same ticker + same Open Date: insert directly after the last
-                # existing row of that exact group so same-day lots stay together.
-                anchor = exact_group_last_row.get((ticker, trade.open_date))
-            elif ticker:
-                # Closing-only entries have no Open Date to match against, so they
-                # are grouped with any existing row for the same ticker instead.
-                anchor = ticker_last_row.get(ticker)
-            else:
-                anchor = None
-            insertion_position = (anchor + 1) if anchor is not None else overall_last_position + 1
+            insertion_position = _determine_insertion_position(rows, headers, trade)
 
             row = _call_with_com_retry(
                 lambda insertion_position=insertion_position: table.ListRows.Add(
@@ -293,16 +281,14 @@ def write_trades_detailed(
                     if conversion_failure is not None:
                         conversion_failures.append(conversion_failure)
 
-            # The new row pushes every existing row at/after insertion_position
-            # down by one, so previously recorded anchor positions must shift
-            # to stay accurate for subsequent trades in this batch.
-            _shift_row_positions(ticker_last_row, insertion_position)
-            _shift_row_positions(exact_group_last_row, insertion_position)
-            if ticker:
-                ticker_last_row[ticker] = insertion_position
-                if trade.open_date is not None:
-                    exact_group_last_row[(ticker, trade.open_date)] = insertion_position
-            overall_last_position += 1
+            row_values = [None] * len(headers)
+            stock_index = header_positions.get(FIELD_TO_COLUMN["stock"])
+            if stock_index is not None and trade.stock:
+                row_values[stock_index - 1] = trade.stock
+            open_date_index = header_positions.get(FIELD_TO_COLUMN["open_date"])
+            if open_date_index is not None and trade.open_date is not None:
+                row_values[open_date_index - 1] = trade.open_date
+            rows.insert(insertion_position - 1, row_values)
 
         _call_with_com_retry(workbook.save)
         return WriteResult(
@@ -1191,6 +1177,14 @@ def _normalize_table_rows(raw_value: Any, width: int) -> list[list[Any]]:
     return [[raw_value] + [None] * (width - 1)]
 
 
+def _row_is_populated(row: list[Any], headers: list[str]) -> bool:
+    """Return True when `row` contains a user-entered value in a dedup column."""
+    indices = [headers.index(col) for col in DEDUP_COLUMNS if col in headers]
+    if indices:
+        return any((row[idx] if idx < len(row) else None) not in (None, "") for idx in indices)
+    return any(cell not in (None, "") for cell in row)
+
+
 def _last_populated_row_position(table: Any, headers: list[str]) -> int:
     """Return the one-based position of the table's last non-empty data row.
 
@@ -1206,28 +1200,109 @@ def _last_populated_row_position(table: Any, headers: list[str]) -> int:
         return 0
 
     rows = _normalize_table_rows(value, len(headers))
-    indices = [headers.index(col) for col in DEDUP_COLUMNS if col in headers]
+    return _last_populated_row_position_from_rows(rows, headers)
 
+
+def _last_populated_row_position_from_rows(rows: list[list[Any]], headers: list[str]) -> int:
+    """Return the one-based position of the last populated row in `rows`."""
     for position in range(len(rows), 0, -1):
-        row = rows[position - 1]
-        if indices:
-            if any((row[idx] if idx < len(row) else None) not in (None, "") for idx in indices):
-                return position
-        elif any(cell not in (None, "") for cell in row):
+        if _row_is_populated(rows[position - 1], headers):
             return position
     return 0
 
 
-def _shift_row_positions(positions: dict[Any, int], from_position: int) -> None:
-    """Bump every recorded row position at/after `from_position` by one.
+def _determine_insertion_position(rows: list[list[Any]], headers: list[str], trade: CanonicalTrade) -> int:
+    """Return the 1-based position where `trade` should be inserted in `rows`."""
+    if not rows:
+        return 1
 
-    Called after inserting a new table row at `from_position`: every existing
-    row that was at or below that position is physically pushed down by one,
-    so any previously recorded anchor position must be adjusted to match.
-    """
-    for key, position in list(positions.items()):
-        if position >= from_position:
-            positions[key] = position + 1
+    last_populated_position = _last_populated_row_position_from_rows(rows, headers)
+    if last_populated_position == 0:
+        return 1
+
+    ticker = str(trade.underlying or trade.stock or "").strip()
+    stock_index = headers.index(FIELD_TO_COLUMN["stock"]) if FIELD_TO_COLUMN["stock"] in headers else None
+    symbol_index = headers.index(STOCK_SYMBOL_COLUMN) if STOCK_SYMBOL_COLUMN in headers else None
+    open_date_index = headers.index(FIELD_TO_COLUMN["open_date"]) if FIELD_TO_COLUMN["open_date"] in headers else None
+
+    if trade.open_date is not None and ticker:
+        same_group_position: int | None = None
+        for row_position, row in enumerate(rows, start=1):
+            if not _row_is_populated(row, headers):
+                continue
+            if _row_ticker(row, stock_index, symbol_index).strip() != ticker:
+                continue
+            row_open_date = _row_open_date(row, headers, open_date_index)
+            if row_open_date == trade.open_date:
+                same_group_position = row_position
+        if same_group_position is not None:
+            return same_group_position + 1
+
+    if trade.open_date is not None and ticker:
+        ticker_last_position: int | None = None
+        ticker_first_later_position: int | None = None
+        for row_position, row in enumerate(rows, start=1):
+            if not _row_is_populated(row, headers):
+                continue
+            if _row_ticker(row, stock_index, symbol_index).strip() != ticker:
+                continue
+            row_open_date = _row_open_date(row, headers, open_date_index)
+            if row_open_date is None:
+                continue
+            if row_open_date > trade.open_date:
+                ticker_first_later_position = (
+                    row_position
+                    if ticker_first_later_position is None
+                    else min(ticker_first_later_position, row_position)
+                )
+            if row_open_date <= trade.open_date:
+                ticker_last_position = row_position
+        if ticker_first_later_position is not None:
+            return ticker_first_later_position
+        if ticker_last_position is not None:
+            return ticker_last_position + 1
+
+    if trade.open_date is not None:
+        for row_position, row in enumerate(rows, start=1):
+            if not _row_is_populated(row, headers):
+                continue
+            row_open_date = _row_open_date(row, headers, open_date_index)
+            if row_open_date is None:
+                continue
+            if row_open_date > trade.open_date:
+                return row_position
+        return last_populated_position + 1
+
+    if ticker:
+        ticker_last_position = None
+        for row_position, row in enumerate(rows, start=1):
+            if not _row_is_populated(row, headers):
+                continue
+            if _row_ticker(row, stock_index, symbol_index).strip() == ticker:
+                ticker_last_position = row_position
+        if ticker_last_position is not None:
+            return ticker_last_position + 1
+
+    return last_populated_position + 1
+
+
+def _row_open_date(row: list[Any], headers: list[str], open_date_index: int | None = None) -> date | None:
+    """Return the parsed Open Date from a table row, if one is present."""
+    if open_date_index is None:
+        open_date_index = headers.index(FIELD_TO_COLUMN["open_date"]) if FIELD_TO_COLUMN["open_date"] in headers else None
+    if open_date_index is None or open_date_index >= len(row):
+        return None
+
+    raw_open_date = row[open_date_index]
+    if raw_open_date in (None, ""):
+        return None
+    if isinstance(raw_open_date, (int, float)):
+        return _excel_serial_to_date(float(raw_open_date))
+    if hasattr(raw_open_date, "date") and callable(getattr(raw_open_date, "date", None)):
+        return raw_open_date.date()
+    if isinstance(raw_open_date, date):
+        return raw_open_date
+    return None
 
 
 def _build_group_last_row_positions(
@@ -1252,7 +1327,6 @@ def _build_group_last_row_positions(
 
     stock_index = headers.index(FIELD_TO_COLUMN["stock"]) if FIELD_TO_COLUMN["stock"] in headers else None
     symbol_index = headers.index(STOCK_SYMBOL_COLUMN) if STOCK_SYMBOL_COLUMN in headers else None
-    open_date_index = headers.index(FIELD_TO_COLUMN["open_date"]) if FIELD_TO_COLUMN["open_date"] in headers else None
 
     for row_index, row in enumerate(rows, start=1):
         ticker = _row_ticker(row, stock_index, symbol_index).strip()
@@ -1260,19 +1334,7 @@ def _build_group_last_row_positions(
             continue
         ticker_last_row[ticker] = row_index
 
-        if open_date_index is None or open_date_index >= len(row):
-            continue
-        raw_open_date = row[open_date_index]
-        if raw_open_date in (None, ""):
-            continue
-        if isinstance(raw_open_date, (int, float)):
-            row_open_date = _excel_serial_to_date(float(raw_open_date))
-        elif hasattr(raw_open_date, "date") and callable(getattr(raw_open_date, "date", None)):
-            row_open_date = raw_open_date.date()
-        elif isinstance(raw_open_date, date):
-            row_open_date = raw_open_date
-        else:
-            row_open_date = None
+        row_open_date = _row_open_date(row, headers)
         if row_open_date is not None:
             exact_group_last_row[(ticker, row_open_date)] = row_index
 

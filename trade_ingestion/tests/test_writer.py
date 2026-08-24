@@ -393,6 +393,32 @@ def test_write_trades_preserves_order_above_trailing_blank_rows(
     assert table.DataBodyRange.Value[3] == blank_row
 
 
+def test_write_trades_inserts_new_rows_by_open_date(
+    monkeypatch: Any, tmp_path: Path
+) -> None:
+    workbook_path = tmp_path / "ledger.xlsx"
+    workbook_path.write_text("placeholder", encoding="utf-8")
+
+    headers = ["Stock", "Open Date", "B/S", "C"]
+    existing_row_1 = ["AAPL", date(2024, 1, 1), "B", 1.0]
+    existing_row_2 = ["MSFT", date(2024, 1, 3), "B", 1.0]
+    blank_row = [None, None, None, None]
+    table = FakeTable(headers, [existing_row_1, existing_row_2, blank_row.copy()])
+    app = FakeApp([])
+    book = FakeBook(str(workbook_path.resolve()), table, app)
+    app.books.append(book)
+
+    monkeypatch.setattr(writer, "xw", FakeXw(app))
+
+    trade = _trade(stock="SPY", open_date=date(2024, 1, 2), quantity=2.0, lot_id="lot-new")
+    written = writer.write_trades(workbook_path, TABLE_NAME, [trade])
+
+    assert written == 1
+    rows = table.DataBodyRange.Value
+    assert [_row_value(row, 1) for row in rows[:3]] == ["AAPL", "SPY", "MSFT"]
+    assert [_row_value(row, 2) for row in rows[:3]] == [date(2024, 1, 1), date(2024, 1, 2), date(2024, 1, 3)]
+
+
 def _row_value(row: Any, column_index: int) -> Any:
     """Read a 1-based column value from a table row that may be a plain list
     (existing/original test fixture rows) or a dict (rows newly added via
