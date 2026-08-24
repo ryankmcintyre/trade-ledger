@@ -239,7 +239,7 @@ def write_trades_detailed(
         conversion_failures: list[ConversionFailure] = []
 
         for trade in pending:
-            ticker = str(trade.stock or trade.underlying or "").strip()
+            ticker = str(trade.underlying or trade.stock or "").strip()
             if trade.open_date is not None and ticker:
                 # Same ticker + same Open Date: insert directly after the last
                 # existing row of that exact group so same-day lots stay together.
