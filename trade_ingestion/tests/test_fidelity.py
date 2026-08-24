@@ -278,11 +278,11 @@ def test_parse_fidelity_csv_emits_lifecycle_effects_for_assigned_exercised_and_e
 
 
 def test_parse_fidelity_csv_treats_dashed_price_as_none_on_expired_and_transfer_rows() -> None:
-    """Reproduces GH issue: transfers and expired options report Price/Amount as '--',
+    """Reproduces GH issue: transfers and expired options report Price as '--',
     which previously blew up float() conversion."""
-    content = """Date,Activity Description,Symbol,Quantity,Price,Amount,Account,Transaction ID,Security Type
-Aug-20-2026,TRANSFERRED FROM TO BROKERAGE OPTION,,--,--,123456,IRA-1,XFER-1,
-Aug-17-2026,EXPIRED CALL (RKLB) ROCKET LAB CORP COM AUG 14 26 $115,RKLB260814C115,2,--,--,IRA-1,EXPIRE-1,Option
+    content = """Date,Activity Description,Symbol,Quantity,Price,Account,Transaction ID,Security Type
+Aug-20-2026,TRANSFERRED FROM TO BROKERAGE OPTION,,--,--,IRA-1,XFER-1,
+Aug-17-2026,EXPIRED CALL (RKLB) ROCKET LAB CORP COM AUG 14 26 $115,RKLB260814C115,2,--,IRA-1,EXPIRE-1,Option
 """
 
     events = parse_fidelity_csv_detailed(content).events
