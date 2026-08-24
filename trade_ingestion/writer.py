@@ -1238,29 +1238,7 @@ def _determine_insertion_position(rows: list[list[Any]], headers: list[str], tra
         if same_group_position is not None:
             return same_group_position + 1
 
-    if trade.open_date is not None and ticker:
-        ticker_last_position: int | None = None
-        ticker_first_later_position: int | None = None
-        for row_position, row in enumerate(rows, start=1):
-            if not _row_is_populated(row, headers):
-                continue
-            if _row_ticker(row, stock_index, symbol_index).strip() != ticker:
-                continue
-            row_open_date = _row_open_date(row, headers, open_date_index)
-            if row_open_date is None:
-                continue
-            if row_open_date > trade.open_date:
-                ticker_first_later_position = (
-                    row_position
-                    if ticker_first_later_position is None
-                    else min(ticker_first_later_position, row_position)
-                )
-            if row_open_date <= trade.open_date:
-                ticker_last_position = row_position
-        if ticker_first_later_position is not None:
-            return ticker_first_later_position
-        if ticker_last_position is not None:
-            return ticker_last_position + 1
+    # No exact same-ticker/date group exists, so use the global date scan below.
 
     if trade.open_date is not None:
         for row_position, row in enumerate(rows, start=1):
