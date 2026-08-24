@@ -235,7 +235,8 @@ def write_trades_detailed(
         symbol_column = headers.index(STOCK_SYMBOL_COLUMN) + 1 if STOCK_SYMBOL_COLUMN in headers else None
         failed_conversions: list[str] = []
         conversion_failures: list[ConversionFailure] = []
-        rows = _normalize_table_rows(getattr(table, "DataBodyRange", None).Value, len(headers))
+        data_range = getattr(table, "DataBodyRange", None)
+        rows = _normalize_table_rows(data_range.Value, len(headers)) if data_range is not None else []
 
         for trade in pending:
             insertion_position = _determine_insertion_position(rows, headers, trade)
