@@ -356,7 +356,10 @@ def _parse_date(value: str) -> date:
 
 
 def _parse_float(value: str) -> float:
-    return float(value.replace("$", "").replace(",", "").strip())
+    stripped = value.replace("$", "").replace(",", "").strip()
+    if stripped in {"--", "-"}:
+        raise FidelityParseError(f"Missing required numeric value: {value!r}")
+    return float(stripped)
 
 
 def _parse_fee_value(value: str | None) -> float:
@@ -375,5 +378,9 @@ def _parse_fee_value(value: str | None) -> float:
 
 def _parse_optional_float(value: str | None) -> float | None:
     if value in (None, ""):
+        return None
+    # NOTE: Fidelity uses "--" (or "-") as a placeholder for "no value" on rows like
+    # NOTE: expirations and transfers, e.g. an EXPIRED row with Price/Amount == "--".
+    if value.strip() in {"--", "-"}:
         return None
     return _parse_float(value)
