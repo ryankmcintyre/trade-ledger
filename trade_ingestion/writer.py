@@ -231,13 +231,27 @@ def write_trades_detailed(
                 pending.append(trade)
                 existing_keys.add(key)
 
-        insertion_position = _last_populated_row_position(table, headers) + 1
+        overall_last_position = _last_populated_row_position(table, headers)
+        ticker_last_row, exact_group_last_row = _build_group_last_row_positions(table, headers)
         stock_column = header_positions.get(FIELD_TO_COLUMN["stock"])
         symbol_column = headers.index(STOCK_SYMBOL_COLUMN) + 1 if STOCK_SYMBOL_COLUMN in headers else None
         failed_conversions: list[str] = []
         conversion_failures: list[ConversionFailure] = []
 
         for trade in pending:
+            ticker = str(trade.stock or trade.underlying or "").strip()
+            if trade.open_date is not None and ticker:
+                # Same ticker + same Open Date: insert directly after the last
+                # existing row of that exact group so same-day lots stay together.
+                anchor = exact_group_last_row.get((ticker, trade.open_date))
+            elif ticker:
+                # Closing-only entries have no Open Date to match against, so they
+                # are grouped with any existing row for the same ticker instead.
+                anchor = ticker_last_row.get(ticker)
+            else:
+                anchor = None
+            insertion_position = (anchor + 1) if anchor is not None else overall_last_position + 1
+
             row = _call_with_com_retry(
                 lambda insertion_position=insertion_position: table.ListRows.Add(
                     Position=insertion_position
@@ -279,7 +293,16 @@ def write_trades_detailed(
                     if conversion_failure is not None:
                         conversion_failures.append(conversion_failure)
 
-            insertion_position += 1
+            # The new row pushes every existing row at/after insertion_position
+            # down by one, so previously recorded anchor positions must shift
+            # to stay accurate for subsequent trades in this batch.
+            _shift_row_positions(ticker_last_row, insertion_position)
+            _shift_row_positions(exact_group_last_row, insertion_position)
+            if ticker:
+                ticker_last_row[ticker] = insertion_position
+                if trade.open_date is not None:
+                    exact_group_last_row[(ticker, trade.open_date)] = insertion_position
+            overall_last_position += 1
 
         _call_with_com_retry(workbook.save)
         return WriteResult(
@@ -1193,3 +1216,64 @@ def _last_populated_row_position(table: Any, headers: list[str]) -> int:
         elif any(cell not in (None, "") for cell in row):
             return position
     return 0
+
+
+def _shift_row_positions(positions: dict[Any, int], from_position: int) -> None:
+    """Bump every recorded row position at/after `from_position` by one.
+
+    Called after inserting a new table row at `from_position`: every existing
+    row that was at or below that position is physically pushed down by one,
+    so any previously recorded anchor position must be adjusted to match.
+    """
+    for key, position in positions.items():
+        if position >= from_position:
+            positions[key] = position + 1
+
+
+def _build_group_last_row_positions(
+    table: Any, headers: list[str]
+) -> tuple[dict[str, int], dict[tuple[str, date], int]]:
+    """Return the last row position for each ticker, and each (ticker, Open Date) pair.
+
+    Used to insert new rows for the same stock symbol/open date immediately after
+    the last existing row of that group, so related trades stay grouped in
+    consecutive rows (see `write_trades_detailed`). `ticker_last_row` supports
+    grouping closing-only trades (no Open Date) by ticker alone.
+    """
+    data_range = getattr(table, "DataBodyRange", None)
+    ticker_last_row: dict[str, int] = {}
+    exact_group_last_row: dict[tuple[str, date], int] = {}
+    if data_range is None:
+        return ticker_last_row, exact_group_last_row
+
+    rows = _normalize_table_rows(data_range.Value, len(headers))
+    if not rows:
+        return ticker_last_row, exact_group_last_row
+
+    stock_index = headers.index("Stock") if "Stock" in headers else None
+    symbol_index = headers.index(STOCK_SYMBOL_COLUMN) if STOCK_SYMBOL_COLUMN in headers else None
+    open_date_index = headers.index("Open Date") if "Open Date" in headers else None
+
+    for row_index, row in enumerate(rows, start=1):
+        ticker = _row_ticker(row, stock_index, symbol_index).strip()
+        if not ticker:
+            continue
+        ticker_last_row[ticker] = row_index
+
+        if open_date_index is None or open_date_index >= len(row):
+            continue
+        raw_open_date = row[open_date_index]
+        if raw_open_date in (None, ""):
+            continue
+        if isinstance(raw_open_date, (int, float)):
+            row_open_date = _excel_serial_to_date(float(raw_open_date))
+        elif hasattr(raw_open_date, "date") and callable(getattr(raw_open_date, "date", None)):
+            row_open_date = raw_open_date.date()
+        elif isinstance(raw_open_date, date):
+            row_open_date = raw_open_date
+        else:
+            row_open_date = None
+        if row_open_date is not None:
+            exact_group_last_row[(ticker, row_open_date)] = row_index
+
+    return ticker_last_row, exact_group_last_row
