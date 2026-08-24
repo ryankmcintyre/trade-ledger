@@ -132,6 +132,7 @@ class WriteResult:
     # via UNDERLYING_DISPLAY_MAP (e.g. "SPXW" -> "S&P 500 INDEX").
     failed_conversions: list[str]
     conversion_failures: list[ConversionFailure] = field(default_factory=list)
+    skipped_duplicates: int = 0
 
 
 def write_trades(
@@ -164,6 +165,7 @@ def write_trades_detailed(
 
         pending: list[CanonicalTrade] = []
         updated_rows = 0
+        skipped_duplicates = 0
         for trade in trades:
             match = _find_existing_row_to_update(table, headers, trade)
             if match is not None:
@@ -190,6 +192,7 @@ def write_trades_detailed(
                         # Already reconciled in a previous run/import — re-importing the
                         # same closing ticket must not shrink the (already-shrunk) open
                         # row a second time.
+                        skipped_duplicates += 1
                         continue
 
                     # Shrink the existing row down to the quantity still open, carrying
@@ -227,9 +230,11 @@ def write_trades_detailed(
                 continue
 
             key = _make_dedup_key(trade, headers)
-            if key not in existing_keys:
-                pending.append(trade)
-                existing_keys.add(key)
+            if key in existing_keys:
+                skipped_duplicates += 1
+                continue
+            pending.append(trade)
+            existing_keys.add(key)
 
         overall_last_position = _last_populated_row_position(table, headers)
         ticker_last_row, exact_group_last_row = _build_group_last_row_positions(table, headers)
@@ -307,6 +312,7 @@ def write_trades_detailed(
         _call_with_com_retry(workbook.save)
         return WriteResult(
             rows_written=len(pending) + updated_rows,
+            skipped_duplicates=skipped_duplicates,
             failed_conversions=failed_conversions,
             conversion_failures=conversion_failures,
         )

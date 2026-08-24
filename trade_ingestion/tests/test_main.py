@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import datetime
 from pathlib import Path
 from typing import Any
 
@@ -25,7 +26,7 @@ def test_run_pipeline_uses_broker_adapter_and_writer(monkeypatch: Any, tmp_path:
             account="Fidelity",
             underlying="AAPL",
             symbol="AAPL",
-            trade_date=__import__("datetime").date(2024, 1, 2),
+            trade_date=datetime.date(2024, 1, 2),
             exp_date=None,
             call_or_put=None,
             side="C",
@@ -43,7 +44,7 @@ def test_run_pipeline_uses_broker_adapter_and_writer(monkeypatch: Any, tmp_path:
             trade_id="",
             underlying="AAPL",
             symbol="AAPL",
-            open_date=__import__("datetime").date(2024, 1, 2),
+            open_date=datetime.date(2024, 1, 2),
             exp_date=None,
             call_or_put=None,
             side="C",
@@ -94,6 +95,93 @@ def test_run_pipeline_uses_broker_adapter_and_writer(monkeypatch: Any, tmp_path:
     assert captured["trades"] == trades
     assert captured["ticker_prompt"] is None
     assert captured["account"] == "fake"
+
+
+def test_run_pipeline_skips_ignored_tickers(monkeypatch: Any, tmp_path: Path) -> None:
+    csv_path = tmp_path / "input.csv"
+    workbook_path = tmp_path / "ledger.xlsx"
+    csv_path.write_text("example", encoding="utf-8")
+    workbook_path.write_text("placeholder", encoding="utf-8")
+
+    captured: dict[str, Any] = {}
+    events = [
+        RawEvent(
+            lot_id="ignored",
+            broker="Fidelity",
+            account="Fidelity",
+            underlying="FSKAX",
+            symbol="FSKAX",
+            trade_date=datetime.date(2024, 1, 2),
+            exp_date=None,
+            call_or_put=None,
+            side="C",
+            strike=None,
+            stock_price=10.0,
+            premium=10.0,
+            quantity=1.0,
+            fees=None,
+            effect="OPEN",
+        ),
+        RawEvent(
+            lot_id="kept",
+            broker="Fidelity",
+            account="Fidelity",
+            underlying="AAPL",
+            symbol="AAPL",
+            trade_date=datetime.date(2024, 1, 3),
+            exp_date=None,
+            call_or_put=None,
+            side="C",
+            strike=None,
+            stock_price=180.0,
+            premium=180.0,
+            quantity=1.0,
+            fees=None,
+            effect="OPEN",
+        ),
+    ]
+
+    def fake_adapter(content: str, symbol_prompt: Any = None, account: str | None = None) -> FidelityParseResult:
+        return FidelityParseResult(events=events, symbol_failures=[])
+
+    def fake_match_trades(input_events: list[RawEvent], existing_lot_ids: set[str] | None = None) -> MatchResult:
+        captured["events"] = input_events
+        return MatchResult(trades=[CanonicalTrade(
+            lot_id="kept",
+            trade_id="",
+            underlying="AAPL",
+            symbol="AAPL",
+            open_date=datetime.date(2024, 1, 3),
+            exp_date=None,
+            call_or_put=None,
+            side="C",
+            strike=None,
+            stock_price_open=180.0,
+            premium=180.0,
+            quantity=1.0,
+            fees=None,
+            exit_price=None,
+            close_date=None,
+            account="Fidelity",
+            stock="AAPL",
+        )], skipped_duplicates=0, open_positions=0)
+
+    def fake_write_trades(
+        path: Path, table_name: str, input_trades: list[CanonicalTrade], ticker_prompt: Any = None
+    ) -> WriteResult:
+        return WriteResult(rows_written=len(input_trades), failed_conversions=[])
+
+    monkeypatch.setitem(main.ADAPTERS, "fake", fake_adapter)
+    monkeypatch.setattr(main, "match_trades_with_summary", fake_match_trades)
+    monkeypatch.setattr(main, "write_trades_detailed", fake_write_trades)
+
+    result = main.run_pipeline(
+        broker="fake", csv_path=csv_path, workbook_path=workbook_path, table_name="Trades"
+    )
+
+    assert [event.underlying for event in captured["events"]] == ["AAPL"]
+    assert result.rows_skipped == 1
+    assert result.rows_ingested == 1
 
 
 def test_run_pipeline_rejects_unsupported_broker(tmp_path: Path) -> None:
@@ -205,7 +293,7 @@ def test_main_parses_cli_arguments(monkeypatch: Any, capsys: pytest.CaptureFixtu
     assert exit_code == 0
     assert capsys.readouterr().out.strip() == (
         f"Ingested 3 trade rows to {workbook_path} [Trades]; "
-        "skipped 2 duplicate rows; "
+        "skipped 2 rows; "
         "left 1 open position unmatched"
     )
 
@@ -354,7 +442,7 @@ def test_main_reports_conversion_failure_details(monkeypatch: Any, capsys: pytes
                         trade_id="",
                         underlying="SPXW",
                         symbol="SPXW",
-                        open_date=__import__("datetime").date(2024, 1, 2),
+                        open_date=datetime.date(2024, 1, 2),
                         exp_date=None,
                         call_or_put=None,
                         side="C",

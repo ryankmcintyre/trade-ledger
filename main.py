@@ -6,9 +6,10 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Callable, Sequence
 
+from constants import IGNORED_TICKERS
 from trade_ingestion.adapters import parse_fidelity_csv_detailed
 from trade_ingestion.matcher import match_trades_with_summary
-from trade_ingestion.models import CanonicalTrade, FidelityParseResult, ResolutionFailure
+from trade_ingestion.models import CanonicalTrade, FidelityParseResult, RawEvent, ResolutionFailure
 from trade_ingestion.writer import ConversionFailure, write_trades_detailed
 
 Adapter = Callable[[str, "Callable[[str, str], str | None] | None", "str | None"], FidelityParseResult]
@@ -45,7 +46,8 @@ def run_pipeline(
     resolved_account = account if account is not None else broker
     csv_content = csv_path.read_text(encoding="utf-8-sig")
     parse_result = adapter(csv_content, symbol_prompt, resolved_account)
-    match_result = match_trades_with_summary(parse_result.events)
+    filtered_events, ignored_rows = _filter_ignored_events(parse_result.events)
+    match_result = match_trades_with_summary(filtered_events)
     write_result = write_trades_detailed(
         workbook_path,
         table_name,
@@ -53,8 +55,9 @@ def run_pipeline(
         ticker_prompt=ticker_prompt,
     )
     written = write_result.rows_written
-    # The writer deduplicates against existing rows using composite keys.
-    skipped = len(match_result.trades) - written
+    # Track three independent skip sources: ignored ticker rows, matcher-level
+    # duplicates, and writer-level duplicates that were already present in the workbook.
+    skipped = ignored_rows + match_result.skipped_duplicates + write_result.skipped_duplicates
     return PipelineResult(
         rows_ingested=written,
         rows_skipped=skipped,
@@ -63,6 +66,22 @@ def run_pipeline(
         conversion_failures=write_result.conversion_failures,
         symbol_failures=parse_result.symbol_failures,
     )
+
+
+def _filter_ignored_events(events: list[RawEvent]) -> tuple[list[RawEvent], int]:
+    filtered_events: list[RawEvent] = []
+    ignored_rows = 0
+    for event in events:
+        if _is_ignored_ticker(event.underlying):
+            ignored_rows += 1
+            continue
+        filtered_events.append(event)
+    return filtered_events, ignored_rows
+
+
+def _is_ignored_ticker(ticker: str | None) -> bool:
+    normalized_ticker = (ticker or "").strip().upper()
+    return normalized_ticker in IGNORED_TICKERS
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -144,7 +163,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     open_label = "open position" if result.open_positions == 1 else "open positions"
     print(
         f"Ingested {result.rows_ingested} trade rows to {args.workbook} [{args.table}]; "
-        f"skipped {result.rows_skipped} duplicate rows; "
+        f"skipped {result.rows_skipped} rows; "
         f"left {result.open_positions} {open_label} unmatched"
     )
     if result.symbol_failures:
