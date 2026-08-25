@@ -2,6 +2,9 @@ FIDELITY_BROKER_NAME = "Fidelity"
 
 TABLE_NAME = "tbl_trades"
 
+# Symbols that should be skipped during imports. Add or remove entries here as needed.
+IGNORED_TICKERS: tuple[str, ...] = ("FSKAX", "FTIHX")
+
 STOCK_FIELD_NAME = "stock"
 
 # Optional workbook column holding CanonicalTrade.lot_id, the primary dedup
