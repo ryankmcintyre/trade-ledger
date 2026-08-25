@@ -518,9 +518,10 @@ def test_write_trades_dedup_by_composite_key(monkeypatch: Any, tmp_path: Path) -
 
     # Try to write the same trade — should be deduped
     trade = _trade()
-    written = writer.write_trades(workbook_path, TABLE_NAME, [trade])
+    result = writer.write_trades_detailed(workbook_path, TABLE_NAME, [trade])
 
-    assert written == 0
+    assert result.rows_written == 0
+    assert result.skipped_duplicates == 1
     assert len(table.added_rows) == 0
 
 
@@ -917,9 +918,10 @@ def test_write_trades_skips_reprocessed_partial_close_split(monkeypatch: Any, tm
         status="Closed",
     )
 
-    written = writer.write_trades(workbook_path, TABLE_NAME, [duplicate_close])
+    result = writer.write_trades_detailed(workbook_path, TABLE_NAME, [duplicate_close])
 
-    assert written == 0
+    assert result.rows_written == 0
+    assert result.skipped_duplicates == 1
     assert len(table.added_rows) == 0
     # The still-open row must remain untouched at 101 shares.
     assert table.DataBodyRange.Value[0][8] == 101.0
