@@ -163,7 +163,7 @@ def main(argv: Sequence[str] | None = None) -> int:
     open_label = "open position" if result.open_positions == 1 else "open positions"
     print(
         f"Ingested {result.rows_ingested} trade rows to {args.workbook} [{args.table}]; "
-        f"skipped {result.rows_skipped} rows; "
+        f"skipped {result.rows_skipped} ignored or duplicate rows; "
         f"left {result.open_positions} {open_label} unmatched"
     )
     if result.symbol_failures:
