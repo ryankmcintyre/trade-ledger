@@ -64,8 +64,8 @@ def match_trades_with_summary(events: list[RawEvent]) -> MatchResult:
                 lot=lot,
                 quantity=matched_quantity,
                 fees=total_fee if total_fee > 0.0 else None,
-                exit_price=event.premium,
-                close_date=event.trade_date,
+                exit_price=_resolve_close_exit_price(event),
+                close_date=_resolve_close_date(event),
                 split_suffix=None,
                 status=_resolve_trade_status(event.effect, is_open=False),
             )
@@ -217,6 +217,18 @@ def _resolve_trade_status(effect: str | None, *, is_open: bool) -> str:
     return STATUS_OPEN if is_open else STATUS_CLOSED
 
 
+def _resolve_close_exit_price(event: RawEvent) -> float | None:
+    if _resolve_trade_status(event.effect, is_open=False) == STATUS_EXPIRED:
+        return 0.0
+    return event.premium
+
+
+def _resolve_close_date(event: RawEvent) -> date | None:
+    if _resolve_trade_status(event.effect, is_open=False) == STATUS_EXPIRED:
+        return event.exp_date or event.trade_date
+    return event.trade_date
+
+
 def _make_trade(
     *,
     lot: OpenLot,
@@ -266,8 +278,8 @@ def _make_orphan_close(event: RawEvent, quantity: float, fees: float | None, *, 
         premium=None,
         quantity=quantity,
         fees=fees,
-        exit_price=event.premium,
-        close_date=event.trade_date,
+        exit_price=_resolve_close_exit_price(event),
+        close_date=_resolve_close_date(event),
         account=event.account,
         stock=_resolve_stock(event.underlying),
         status=status,

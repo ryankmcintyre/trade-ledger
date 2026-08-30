@@ -123,7 +123,7 @@ def _parse_row(
         if parsed_symbol is None:
             return None, failure
         quantity = quantity_raw
-        premium = price
+        premium = 0.0 if mapping.get("effect") == "EXPIRED" else price
     else:
         parsed_symbol = {
             "underlying": symbol_text,
