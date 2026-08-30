@@ -130,7 +130,38 @@ def test_match_trades_lifecycle_event_resolves_original_open_lot_side(opening_si
     trade = trades[0]
     assert trade.side == opening_side
     assert trade.status == "Expired"
-    assert trade.close_date == date(2024, 1, 3)
+    assert trade.close_date == date(2024, 1, 19)
+
+
+def test_match_trades_expired_option_closes_at_zero_and_uses_expiration_date() -> None:
+    trades = match_trades(
+        [
+            _event(lot_id="open-1", trade_date=date(2024, 1, 2), effect="OPEN", quantity=1.0, premium=2.0, fees=0.1, side="B"),
+            RawEvent(
+                lot_id="close-1",
+                broker="Fidelity",
+                account="Fidelity",
+                underlying="SPY",
+                symbol="SPY 240119C00450000",
+                trade_date=date(2024, 1, 20),
+                exp_date=date(2024, 1, 19),
+                call_or_put="Call",
+                side=None,
+                strike=450.0,
+                stock_price=470.0,
+                premium=None,
+                quantity=1.0,
+                fees=0.2,
+                effect="EXPIRED",
+            ),
+        ],
+    )
+
+    assert len(trades) == 1
+    trade = trades[0]
+    assert trade.status == "Expired"
+    assert trade.exit_price == 0.0
+    assert trade.close_date == date(2024, 1, 19)
 
 
 def test_match_trades_lifecycle_event_prefers_long_open_lot_when_both_sides_exist() -> None:

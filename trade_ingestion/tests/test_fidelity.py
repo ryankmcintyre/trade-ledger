@@ -201,6 +201,21 @@ def test_parse_fidelity_csv_accepts_compact_option_symbol_without_leading_dash()
     assert event.side == "B"
 
 
+def test_parse_fidelity_csv_expired_option_uses_zero_price_and_expiration_date() -> None:
+    content = """Trade Date,Action,Symbol,Quantity,Price,Commission,Account,Transaction ID,Security Type
+    Aug-31-2026,EXPIRED PUT (AFRM) AFFIRM HOLDINGS INC AUG 28 26 $65,AFRM260828P65,2,--,--,IRA-1,EXPIRE-1,Option
+    """
+
+    events = parse_fidelity_csv_detailed(content).events
+
+    assert len(events) == 1
+    event = events[0]
+    assert event.effect == "EXPIRED"
+    assert event.exp_date == date(2026, 8, 28)
+    assert event.premium == 0.0
+    assert event.symbol == "AFRM 260828P00065000"
+
+
 def test_parse_fidelity_csv_treats_dashed_commission_as_zero() -> None:
     content = """Trade Date,Action,Symbol,Quantity,Price,Commission,Account,Transaction ID,Security Type
     2024-01-02,Buy,AAPL,100,180.50,--,IRA-1,EQ-BUY,Equity
@@ -291,7 +306,7 @@ Aug-17-2026,EXPIRED CALL (RKLB) ROCKET LAB CORP COM AUG 14 26 $115,RKLB260814C11
     event = events[0]
     assert event.effect == "EXPIRED"
     assert event.underlying == "RKLB"
-    assert event.premium is None
+    assert event.premium == 0.0
 
 
 def _renamed_ticker_csv() -> str:
