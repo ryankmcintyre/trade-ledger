@@ -1,5 +1,8 @@
 FIDELITY_BROKER_NAME = "Fidelity"
 
+COMMON_STOCK_SIDE = "C"
+SHORT_SIDE = "S"
+
 TABLE_NAME = "tbl_trades"
 
 # Symbols that should be skipped during imports. Add or remove entries here as needed.

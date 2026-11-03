@@ -216,8 +216,8 @@ def _map_action(action: str) -> dict[str, str] | None:
         if sold:
             return {"effect": "CLOSE", "side": "B", "instrument": "option"}
 
-    # TODO: Short equity transactions use side='S' as a placeholder; the canonical schema does
-    # TODO: not yet explicitly specify how short equity open/close positions should be represented.
+    # NOTE: Raw short equity events retain side='S' to match covers separately from long stock.
+    # NOTE: The matcher writes them as common stock (side='C') with negative quantities.
     if "short sale" in normalized and sold:
         return {"effect": "OPEN", "side": "S", "instrument": "equity"}
     if "short cover" in normalized and bought:

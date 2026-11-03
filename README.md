@@ -97,6 +97,7 @@ Ingested 12 trade rows to /Users/ryan/trades/ledger.xlsx [tbl_trades]; skipped 3
 Parses Fidelity transaction history CSV exports. The adapter handles:
 
 - **Equities** — buy and sell actions (both short-form like `Buy` and the verbose descriptions Fidelity uses in real exports, e.g. `YOU BOUGHT CLOUDFLARE INC CL A COM (NET) (Margin)`)
+- **Short equities** — `YOU SOLD SHORT SALE` opens and `YOU BOUGHT SHORT COVER` closes are written with `B/S = C` and a negative `C` quantity. Stock quantities use 100-share units, so a 10-share short writes `C = -0.1`; Premium and Exit Price remain positive per-share prices.
 - **Options** — open and close transactions for calls and puts (e.g. `YOU BOUGHT OPENING TRANSACTION PUT (SPXW)...`)
 - Metadata rows and footer disclaimer text at the top/bottom of the file are skipped automatically
 - Option symbols are normalised to OCC format from Fidelity's compact notation (e.g. `-SPXW260618P7400` → `SPXW 260618P07400000`)

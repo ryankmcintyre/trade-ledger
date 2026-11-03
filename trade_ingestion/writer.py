@@ -171,7 +171,14 @@ def write_trades_detailed(
             if match is not None:
                 row_index, row = match
                 remaining_quantity = _remaining_open_quantity(row, headers, trade.quantity)
-                if remaining_quantity is not None and remaining_quantity > MATCH_EPSILON:
+                if remaining_quantity is None and trade.open_date is None:
+                    key = _make_dedup_key(
+                        _merge_open_fields_from_row(trade, row, headers), headers
+                    )
+                    if key in existing_keys:
+                        skipped_duplicates += 1
+                        continue
+                if remaining_quantity is not None and abs(remaining_quantity) > MATCH_EPSILON:
                     # Partial close: the matched row's open quantity is larger than what
                     # this close accounts for (e.g. two separate sell tickets closing a
                     # single larger open lot). The closed portion is written as its own
@@ -652,9 +659,9 @@ def _allocate_fee(total_fee: float | None, quantity_pool: float | None, quantity
     """
     if total_fee is None or quantity_pool is None:
         return None
-    if quantity_pool <= MATCH_EPSILON:
+    if abs(quantity_pool) <= MATCH_EPSILON:
         return None
-    return total_fee * (quantity_slice / quantity_pool)
+    return total_fee * (abs(quantity_slice) / abs(quantity_pool))
 
 
 def _is_exact_quantity_match(row: list[Any], headers: list[str], close_quantity: float) -> bool:
@@ -699,10 +706,10 @@ def _remaining_open_quantity(row: list[Any], headers: list[str], close_quantity:
     if row_quantity is None:
         return None
 
-    remaining = row_quantity - close_quantity
+    remaining = abs(row_quantity) - abs(close_quantity)
     if remaining <= MATCH_EPSILON:
         return None
-    return remaining
+    return -remaining if row_quantity < 0 else remaining
 
 
 def _row_has_close_values(row: list[Any], headers: list[str]) -> bool:
@@ -752,7 +759,9 @@ def _row_matches_trade(
             # the row's open quantity — e.g. two separate closing tickets against
             # one larger open lot. A close quantity greater than what's open on
             # the row can never be satisfied by it.
-            if row_quantity_value - float(trade.quantity) < -MATCH_EPSILON:
+            if row_quantity_value * trade.quantity < 0:
+                return False
+            if abs(row_quantity_value) - abs(trade.quantity) < -MATCH_EPSILON:
                 return False
 
     if account_index is not None and account_index < len(row):
