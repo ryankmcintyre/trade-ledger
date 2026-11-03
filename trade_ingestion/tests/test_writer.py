@@ -8,6 +8,8 @@ import pytest
 
 from constants import STOCK_SYMBOL_COLUMN, STOCKS_SERVICE_ID, TABLE_NAME
 import trade_ingestion.writer as writer
+from trade_ingestion.adapters.fidelity import parse_fidelity_csv_detailed
+from trade_ingestion.matcher import match_trades
 from trade_ingestion.models import CanonicalTrade
 
 try:  # pragma: no cover - pywin32 is only importable on Windows
@@ -318,6 +320,62 @@ def test_write_trades_uses_column_mapping(monkeypatch: Any, tmp_path: Path) -> N
     assert 8 not in row  # DTE
     assert 9 not in row  # Current Stock Price
     assert 10 not in row  # Break Even Price
+
+
+@pytest.mark.parametrize("cover_quantity", [4, 10])
+def test_write_trades_reconciles_short_stock_cover(
+    monkeypatch: Any, tmp_path: Path, cover_quantity: int
+) -> None:
+    workbook_path = tmp_path / "ledger.xlsx"
+    workbook_path.write_text("placeholder", encoding="utf-8")
+    headers = ["Stock", "Stock Symbol", "Open Date", "B/S", "Premium", "C",
+               "Fees", "Exit Price", "Close Date", "Status", "Account", "Profit/Loss"]
+    long_row = ["AMZN", "AMZN", date(2026, 10, 28), "C", 230, 0.1,
+                1.0, None, None, "Open", "Fidelity", "=long-formula"]
+    short_row = ["AMZN", "AMZN", date(2026, 10, 28), "C", 231.3, -0.1,
+                 1.0, None, None, "Open", "Fidelity", "=short-formula"]
+    table = FakeTable(headers, [long_row.copy(), short_row.copy()])
+    app = FakeApp([])
+    book = FakeBook(str(workbook_path.resolve()), table, app)
+    app.books.append(book)
+    monkeypatch.setattr(writer, "xw", FakeXw(app))
+
+    content = f"""Date,Activity Description,Symbol,Quantity,Price,Commission
+Oct-29-2026,YOU BOUGHT SHORT COVER,AMZN,{cover_quantity},229.08,0.2
+"""
+    trades = match_trades(parse_fidelity_csv_detailed(content).events)
+    result = writer.write_trades_detailed(workbook_path, TABLE_NAME, trades)
+
+    assert result.rows_written == 1
+    assert table.DataBodyRange.Value[0] == long_row
+    if cover_quantity == 10:
+        closed_row = table.rows_by_number[3].values
+        assert not table.added_rows
+    else:
+        closed_row = table.added_rows[0]
+        remaining_row = table.DataBodyRange.Value[1]
+        assert remaining_row[5] == pytest.approx(-0.06)
+        assert remaining_row[6] == pytest.approx(0.6)
+        assert remaining_row[7:10] == [None, None, "Open"]
+        assert remaining_row[11] == "=short-formula"
+    assert closed_row[4] == "C"
+    assert closed_row[5] == 231.3
+    assert closed_row[6] == pytest.approx(-cover_quantity / 100)
+    assert closed_row[7] == pytest.approx(0.2 + cover_quantity / 10)
+    assert closed_row[8] == 229.08
+    assert closed_row[9] == date(2026, 10, 29)
+    if cover_quantity == 4:
+        assert 12 not in closed_row
+    else:
+        assert closed_row[12] == "=short-formula"
+
+    table.DataBodyRange.Value = [
+        [_row_value(row, index) for index in range(1, len(headers) + 1)]
+        for row in table.DataBodyRange.Value
+    ]
+    repeated = writer.write_trades_detailed(workbook_path, TABLE_NAME, trades)
+    assert repeated.rows_written == 0
+    assert repeated.skipped_duplicates == 1
 
 
 def test_write_trades_inserts_below_last_populated_row(

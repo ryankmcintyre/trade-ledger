@@ -5,7 +5,7 @@ from dataclasses import dataclass
 from datetime import date
 from typing import Deque
 
-from constants import UNDERLYING_DISPLAY_MAP
+from constants import COMMON_STOCK_SIDE, SHORT_SIDE, UNDERLYING_DISPLAY_MAP
 from trade_ingestion.models import CanonicalTrade, OpenLot, RawEvent
 
 MATCH_EPSILON = 1e-9
@@ -229,6 +229,12 @@ def _resolve_close_date(event: RawEvent) -> date | None:
     return event.trade_date
 
 
+def _canonical_position(event: RawEvent, quantity: float) -> tuple[str | None, float]:
+    if event.side == SHORT_SIDE and event.call_or_put is None and event.exp_date is None:
+        return COMMON_STOCK_SIDE, -quantity
+    return event.side, quantity
+
+
 def _make_trade(
     *,
     lot: OpenLot,
@@ -240,6 +246,7 @@ def _make_trade(
     status: str | None,
 ) -> CanonicalTrade:
     lot_id = lot.event.lot_id if split_suffix is None else f"{lot.event.lot_id}:{split_suffix}"
+    side, quantity = _canonical_position(lot.event, quantity)
     return CanonicalTrade(
         lot_id=lot_id,
         trade_id="",
@@ -248,7 +255,7 @@ def _make_trade(
         open_date=lot.event.trade_date,
         exp_date=lot.event.exp_date,
         call_or_put=lot.event.call_or_put,
-        side=lot.event.side,
+        side=side,
         strike=lot.event.strike,
         stock_price_open=lot.event.stock_price,
         premium=lot.event.premium,
@@ -264,6 +271,7 @@ def _make_trade(
 
 def _make_orphan_close(event: RawEvent, quantity: float, fees: float | None, *, status: str | None) -> CanonicalTrade:
     """Create a close-only row for sells without a matching open in the import data."""
+    side, quantity = _canonical_position(event, quantity)
     return CanonicalTrade(
         lot_id=event.lot_id,
         trade_id="",
@@ -272,7 +280,7 @@ def _make_orphan_close(event: RawEvent, quantity: float, fees: float | None, *, 
         open_date=None,
         exp_date=event.exp_date,
         call_or_put=event.call_or_put,
-        side=event.side,
+        side=side,
         strike=event.strike,
         stock_price_open=None,
         premium=None,
