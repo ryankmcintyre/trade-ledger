@@ -171,6 +171,13 @@ def write_trades_detailed(
             if match is not None:
                 row_index, row = match
                 remaining_quantity = _remaining_open_quantity(row, headers, trade.quantity)
+                if remaining_quantity is None and trade.open_date is None:
+                    key = _make_dedup_key(
+                        _merge_open_fields_from_row(trade, row, headers), headers
+                    )
+                    if key in existing_keys:
+                        skipped_duplicates += 1
+                        continue
                 if remaining_quantity is not None and abs(remaining_quantity) > MATCH_EPSILON:
                     # Partial close: the matched row's open quantity is larger than what
                     # this close accounts for (e.g. two separate sell tickets closing a
